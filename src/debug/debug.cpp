@@ -2381,6 +2381,9 @@ static void DEBUG_InitHeavyRawBuffer(void) {
 			              (unsigned int)((static_cast<Bit64u>(logRawCapacity) * RAW_INST_SIZE) / (1024u * 1024u)));
 		}
 	}
+	DEBUG_ShowMsg("DEBUG: Heavy raw buffer size %u records (~%u MB).\n",
+	              logRawCapacity,
+	              (unsigned int)((static_cast<Bit64u>(logRawCapacity) * RAW_INST_SIZE) / (1024u * 1024u)));
 	logRawCount = 0;
 	logRawSeq = 0;
 	logFlushIndex = 0;
@@ -2397,12 +2400,50 @@ static bool DEBUG_WriteRawLogFile(const char* filename) {
 	return true;
 }
 
+static bool DEBUG_WriteTextSnapshot(Bit32u flushIndex) {
+	char int_filename[32];
+	snprintf(int_filename,sizeof(int_filename),"LOGCPU_INT_CD_%04u.TXT",flushIndex);
+	ofstream out(int_filename);
+	if (!out.is_open()) {
+		DEBUG_ShowMsg("DEBUG: Failed to create %s.\n", int_filename);
+		return false;
+	}
+	out << hex << noshowbase << setfill('0') << uppercase;
+	out << "; Program: " << (heavyExePath.empty() ? "<unknown>" : heavyExePath) << endl;
+	out << "; Type: " << GetHeavyExeTypeString(heavyExeType) << endl;
+	out << "; PSP: " << setw(4) << heavyExePspSeg << " Parent: " << setw(4) << heavyExeParentPsp
+	    << " LoadSeg: " << setw(4) << heavyExeLoadSeg << " Format: " << (heavyExeIsExe ? "EXE" : "COM");
+	if (heavyExeIsExe) {
+		out << " (header " << dec << heavyExeHeaderSize << " bytes)" << hex;
+	}
+	out << endl;
+	Bit32u startLog = logCount;
+	do {
+		TLogInst & inst = logInst[startLog];
+		out << setw(4) << inst.s_cs << ":" << setw(8) << inst.eip << "  " 
+		    << inst.dline << "  " << inst.res << " EAX:" << setw(8)<< inst.eax
+		    << " EBX:" << setw(8) << inst.ebx << " ECX:" << setw(8) << inst.ecx
+		    << " EDX:" << setw(8) << inst.edx << " ESI:" << setw(8) << inst.esi
+		    << " EDI:" << setw(8) << inst.edi << " EBP:" << setw(8) << inst.ebp
+		    << " ESP:" << setw(8) << inst.esp << " DS:"  << setw(4) << inst.s_ds
+		    << " ES:"  << setw(4) << inst.s_es<< " FS:"  << setw(4) << inst.s_fs
+		    << " GS:"  << setw(4) << inst.s_gs<< " SS:"  << setw(4) << inst.s_ss
+		    << " CF:"  << inst.c  << " ZF:"   << inst.z  << " SF:"  << inst.s
+		    << " OF:"  << inst.o  << " AF:"   << inst.a  << " PF:"  << inst.p
+		    << " IF:"  << inst.i  << endl;
+		if (++startLog >= LOGCPUMAX) startLog = 0;
+	} while (startLog != logCount);
+	out.close();
+	return true;
+}
+
 static void DEBUG_BlockingFlushRawLog(Bit32u flushIndex = 0) {
 	if (!logRawInst || logRawCount == 0) return;
 	if (logRawFlushInProgress) return;
 	logRawFlushInProgress = true;
 	if (flushIndex == 0) flushIndex = logFlushIndex + 1;
 	if (flushIndex > logFlushIndex) logFlushIndex = flushIndex;
+	DEBUG_WriteTextSnapshot(flushIndex);
 	char filename[32];
 	snprintf(filename,sizeof(filename),"LOGCPU_RAW_%04u.BIN",flushIndex);
 	if (!DEBUG_WriteRawLogFile(filename)) {
@@ -2491,49 +2532,6 @@ void DEBUG_HeavyLogInstruction(void) {
 
 void DEBUG_HeavyWriteLogInstruction(void) {
 	Bit32u flushIndex = logFlushIndex + 1;
-	DEBUG_ShowMsg("DEBUG: Creating cpu log LOGCPU_INT_CD.TXT\n");
-
-	char int_filename[32];
-	snprintf(int_filename,sizeof(int_filename),"LOGCPU_INT_CD_%04u.TXT",flushIndex);
-	ofstream out(int_filename);
-	if (!out.is_open()) {
-		DEBUG_ShowMsg("DEBUG: Failed.\n");	
-		return;
-	}
-	out << hex << noshowbase << setfill('0') << uppercase;
-	out << "; Program: " << (heavyExePath.empty() ? "<unknown>" : heavyExePath) << endl;
-	out << "; Type: " << GetHeavyExeTypeString(heavyExeType) << endl;
-	out << "; PSP: " << setw(4) << heavyExePspSeg << " Parent: " << setw(4) << heavyExeParentPsp
-	    << " LoadSeg: " << setw(4) << heavyExeLoadSeg << " Format: " << (heavyExeIsExe ? "EXE" : "COM");
-	if (heavyExeIsExe) {
-		out << " (header " << dec << heavyExeHeaderSize << " bytes)" << hex;
-	}
-	out << endl;
-	Bit32u startLog = logCount;
-	do {
-		// Write Intructions
-		TLogInst & inst = logInst[startLog];
-		out << setw(4) << inst.s_cs << ":" << setw(8) << inst.eip << "  " 
-		    << inst.dline << "  " << inst.res << " EAX:" << setw(8)<< inst.eax
-		    << " EBX:" << setw(8) << inst.ebx << " ECX:" << setw(8) << inst.ecx
-		    << " EDX:" << setw(8) << inst.edx << " ESI:" << setw(8) << inst.esi
-		    << " EDI:" << setw(8) << inst.edi << " EBP:" << setw(8) << inst.ebp
-		    << " ESP:" << setw(8) << inst.esp << " DS:"  << setw(4) << inst.s_ds
-		    << " ES:"  << setw(4) << inst.s_es<< " FS:"  << setw(4) << inst.s_fs
-		    << " GS:"  << setw(4) << inst.s_gs<< " SS:"  << setw(4) << inst.s_ss
-		    << " CF:"  << inst.c  << " ZF:"   << inst.z  << " SF:"  << inst.s
-		    << " OF:"  << inst.o  << " AF:"   << inst.a  << " PF:"  << inst.p
-		    << " IF:"  << inst.i  << endl;
-
-/*		fprintf(f,"%04X:%08X   %s  %s  EAX:%08X EBX:%08X ECX:%08X EDX:%08X ESI:%08X EDI:%08X EBP:%08X ESP:%08X DS:%04X ES:%04X FS:%04X GS:%04X SS:%04X CF:%01X ZF:%01X SF:%01X OF:%01X AF:%01X PF:%01X IF:%01X\n",
-			logInst[startLog].s_cs,logInst[startLog].eip,logInst[startLog].dline,logInst[startLog].res,logInst[startLog].eax,logInst[startLog].ebx,logInst[startLog].ecx,logInst[startLog].edx,logInst[startLog].esi,logInst[startLog].edi,logInst[startLog].ebp,logInst[startLog].esp,
-		        logInst[startLog].s_ds,logInst[startLog].s_es,logInst[startLog].s_fs,logInst[startLog].s_gs,logInst[startLog].s_ss,
-		        logInst[startLog].c,logInst[startLog].z,logInst[startLog].s,logInst[startLog].o,logInst[startLog].a,logInst[startLog].p,logInst[startLog].i);*/
-		if (++startLog >= LOGCPUMAX) startLog = 0;
-	} while (startLog != logCount);
-	
-	out.close();
-
 	DEBUG_BlockingFlushRawLog(flushIndex);
 	DEBUG_ShowMsg("DEBUG: Done.\n");	
 };
