@@ -2309,6 +2309,8 @@ struct TLogInst {
 
 TLogInst logInst[LOGCPUMAX];
 
+/* Raw trace record (packed to avoid padding differences between compilers). */
+#pragma pack(push,1)
 struct TRawInst {
 	Bit64u seq;
 	Bit16u s_cs;
@@ -2330,6 +2332,10 @@ struct TRawInst {
 	Bit16u s_ss;
 	Bit8u  flags; /* packed: bit0 CF, bit1 ZF, bit2 SF, bit3 OF, bit4 AF, bit5 PF, bit6 IF */
 };
+#pragma pack(pop)
+
+static const Bit32u RAW_INST_SIZE = 73; /* Packed size of TRawInst */
+static_assert(sizeof(TRawInst) == RAW_INST_SIZE, "TRawInst packing mismatch");
 
 static TRawInst logRawInst[LOGCPUMAX];
 
@@ -2458,7 +2464,7 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 		Bit32u version;
 		Bit32u record_size;
 		Bit32u count;
-	} header = { { 'H','R','A','W' }, 2, (Bit32u)sizeof(TRawInst), 0 };
+	} header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, 0 };
 
 	ofstream outraw("LOGCPU_RAW.BIN",ios::binary);
 	if (outraw.is_open()) {
@@ -2471,7 +2477,7 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 		for (Bit32u idx=0; idx<totalRaw; idx++) {
 			Bit32u pos = startRaw + idx;
 			if (pos>=LOGCPUMAX) pos-=LOGCPUMAX;
-			outraw.write((char*)&logRawInst[pos],sizeof(TRawInst));
+			outraw.write((char*)&logRawInst[pos],RAW_INST_SIZE);
 		}
 		outraw.close();
 		DEBUG_ShowMsg("DEBUG: Raw cpu log LOGCPU_RAW.BIN created\n");
