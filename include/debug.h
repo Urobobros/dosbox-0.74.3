@@ -30,6 +30,14 @@ extern Bitu cycle_count;
 extern Bitu debugCallback;
 
 #ifdef C_HEAVY_DEBUG
+enum ExeType {
+	EXE_UNKNOWN,
+	EXE_MZ_REALMODE,
+	EXE_LE_DOS4GW,
+	EXE_LX_DOS4GW
+};
+
 bool DEBUG_HeavyIsBreakpoint(void);
 void DEBUG_HeavyWriteLogInstruction(void);
+void DEBUG_UpdateHeavyExeInfo(const char * exe_path, Bit16u psp_seg, Bit16u load_seg, Bit32u header_size, bool is_exe, Bit16u parent_psp, ExeType exe_type);
 #endif

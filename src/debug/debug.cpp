@@ -109,7 +109,15 @@ static bool		cpuLog			= false;
 static int		cpuLogCounter	= 0;
 static int		cpuLogType		= 1;	// log detail
 static bool zeroProtect = false;
-bool	logHeavy	= false;
+bool	logHeavy	= true;
+
+static string heavyExePath;
+static Bit16u heavyExePspSeg = 0;
+static Bit16u heavyExeLoadSeg = 0;
+static Bit32u heavyExeHeaderSize = 0;
+static Bit16u heavyExeParentPsp = 0;
+static bool heavyExeIsExe = false;
+static ExeType heavyExeType = EXE_UNKNOWN;
 #endif
 
 
@@ -1244,8 +1252,8 @@ bool ParseCommand(char* str) {
 
 #if C_HEAVY_DEBUG
 	if (command == "HEAVYLOG") { // Create Cpu log file
-		logHeavy = !logHeavy;
-		DEBUG_ShowMsg("DEBUG: Heavy cpu logging %s.\n",logHeavy?"on":"off");
+		DEBUG_ShowMsg("DEBUG: Heavy cpu logging is always enabled; writing log snapshot.\n");
+		DEBUG_HeavyWriteLogInstruction();
 		return true;
 	};
 
@@ -1876,6 +1884,27 @@ static void LogCPUInfo(void) {
 };
 
 #if C_HEAVY_DEBUG
+static const char * GetHeavyExeTypeString(ExeType type) {
+	switch (type) {
+	case EXE_MZ_REALMODE:	return "MZ";
+	case EXE_LE_DOS4GW:		return "DOS4GW (LE)";
+	case EXE_LX_DOS4GW:		return "DOS4GW (LX)";
+	default:				return "<unknown>";
+	}
+}
+
+void DEBUG_UpdateHeavyExeInfo(const char * exe_path, Bit16u psp_seg, Bit16u load_seg, Bit32u header_size, bool is_exe, Bit16u parent_psp, ExeType exe_type) {
+	if (exe_path) heavyExePath = exe_path;
+	else heavyExePath.clear();
+
+	heavyExePspSeg = psp_seg;
+	heavyExeLoadSeg = load_seg;
+	heavyExeHeaderSize = header_size;
+	heavyExeIsExe = is_exe;
+	heavyExeParentPsp = parent_psp;
+	heavyExeType = exe_type;
+}
+
 static void LogInstruction(Bit16u segValue, Bit32u eipValue,  ofstream& out) {
 	static char empty[23] = { 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,0 };
 
@@ -2029,6 +2058,9 @@ void DEBUG_SetupConsole(void) {
 static void DEBUG_ShutDown(Section * /*sec*/) {
 	CBreakpoint::DeleteAll();
 	CDebugVar::DeleteAll();
+#if C_HEAVY_DEBUG
+	DEBUG_HeavyWriteLogInstruction();
+#endif
 	curs_set(old_cursor_state);
 	#ifndef WIN32
 	tcsetattr(0, TCSANOW,&consolesettings);
@@ -2244,6 +2276,8 @@ const Bit32u LOGCPUMAX = 20000;
 static Bit16u logCpuCS [LOGCPUMAX];
 static Bit32u logCpuEIP[LOGCPUMAX];
 static Bit32u logCount = 0;
+static Bit32u logRawCount = 0;
+static bool   logRawWrapped = false;
 
 struct TLogInst {
 	Bit16u s_cs;
@@ -2274,20 +2308,36 @@ struct TLogInst {
 
 TLogInst logInst[LOGCPUMAX];
 
-void DEBUG_HeavyLogInstruction(void) {
+struct TRawInst {
+	Bit16u s_cs;
+	Bit32u eip;
+	Bit8u  len;
+	Bit8u  bytes[15];
+	Bit32u eax;
+	Bit32u ebx;
+	Bit32u ecx;
+	Bit32u edx;
+	Bit32u esi;
+	Bit32u edi;
+	Bit32u ebp;
+	Bit32u esp;
+	Bit16u s_ds;
+	Bit16u s_es;
+	Bit16u s_fs;
+	Bit16u s_gs;
+	Bit16u s_ss;
+	Bit8u  flags; /* packed: bit0 CF, bit1 ZF, bit2 SF, bit3 OF, bit4 AF, bit5 PF, bit6 IF */
+};
 
-	static char empty[23] = { 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,0 };
+static TRawInst logRawInst[LOGCPUMAX];
+
+void DEBUG_HeavyLogInstruction(void) {
 
 	PhysPt start = GetAddress(SegValue(cs),reg_eip);
 	char dline[200];
 	Bitu size = DasmI386(dline, start, reg_eip, cpu.code.big);
-	char* res = empty;
-	if (showExtend) {
-		res = AnalyzeInstruction(dline,false);
-		if (!res || !(*res)) res = empty;
-		Bitu reslen = strlen(res);
-		if (reslen<22) for (Bitu i=0; i<22-reslen; i++) res[reslen+i] = ' '; res[22] = 0;
-	};
+	static char res_empty[23] = { 32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,0 };
+	char* res = res_empty;
 
 	Bitu len = strlen(dline);
 	if (len < 30) for (Bitu i=0; i < 30-len; i++) dline[len+i] = ' ';
@@ -2319,13 +2369,46 @@ void DEBUG_HeavyLogInstruction(void) {
 	inst.p    = get_PF()>0;
 	inst.i    = GETFLAGBOOL(IF);
 
+	TRawInst & raw = logRawInst[logRawCount];
+	raw.s_cs = inst.s_cs;
+	raw.eip  = inst.eip;
+	raw.len  = (Bit8u)((size>15) ? 15 : size);
+	for (Bit8u i=0;i<raw.len;i++) {
+		Bit8u value=0;
+		if (mem_readb_checked(start+i,&value)) value = 0;
+		raw.bytes[i]=value;
+	}
+	if (raw.len<15) for (Bit8u i=raw.len;i<15;i++) raw.bytes[i]=0;
+	raw.eax = reg_eax;
+	raw.ebx = reg_ebx;
+	raw.ecx = reg_ecx;
+	raw.edx = reg_edx;
+	raw.esi = reg_esi;
+	raw.edi = reg_edi;
+	raw.ebp = reg_ebp;
+	raw.esp = reg_esp;
+	raw.s_ds = SegValue(ds);
+	raw.s_es = SegValue(es);
+	raw.s_fs = SegValue(fs);
+	raw.s_gs = SegValue(gs);
+	raw.s_ss = SegValue(ss);
+	raw.flags = 0;
+	raw.flags |= (get_CF()>0) ? 0x01 : 0;
+	raw.flags |= (get_ZF()>0) ? 0x02 : 0;
+	raw.flags |= (get_SF()>0) ? 0x04 : 0;
+	raw.flags |= (get_OF()>0) ? 0x08 : 0;
+	raw.flags |= (get_AF()>0) ? 0x10 : 0;
+	raw.flags |= (get_PF()>0) ? 0x20 : 0;
+	raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
+
 	if (++logCount >= LOGCPUMAX) logCount = 0;
+	if (++logRawCount >= LOGCPUMAX) {
+		logRawCount = 0;
+		logRawWrapped = true;
+	}
 };
 
 void DEBUG_HeavyWriteLogInstruction(void) {
-	if (!logHeavy) return;
-	logHeavy = false;
-	
 	DEBUG_ShowMsg("DEBUG: Creating cpu log LOGCPU_INT_CD.TXT\n");
 
 	ofstream out("LOGCPU_INT_CD.TXT");
@@ -2334,6 +2417,14 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 		return;
 	}
 	out << hex << noshowbase << setfill('0') << uppercase;
+	out << "; Program: " << (heavyExePath.empty() ? "<unknown>" : heavyExePath) << endl;
+	out << "; Type: " << GetHeavyExeTypeString(heavyExeType) << endl;
+	out << "; PSP: " << setw(4) << heavyExePspSeg << " Parent: " << setw(4) << heavyExeParentPsp
+	    << " LoadSeg: " << setw(4) << heavyExeLoadSeg << " Format: " << (heavyExeIsExe ? "EXE" : "COM");
+	if (heavyExeIsExe) {
+		out << " (header " << dec << heavyExeHeaderSize << " bytes)" << hex;
+	}
+	out << endl;
 	Bit32u startLog = logCount;
 	do {
 		// Write Intructions
@@ -2358,6 +2449,32 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 	} while (startLog != logCount);
 	
 	out.close();
+
+	struct RawLogHeader {
+		char   magic[4];
+		Bit32u version;
+		Bit32u record_size;
+		Bit32u count;
+	} header = { { 'H','R','A','W' }, 1, (Bit32u)sizeof(TRawInst), 0 };
+
+	ofstream outraw("LOGCPU_RAW.BIN",ios::binary);
+	if (outraw.is_open()) {
+		if (logRawWrapped) header.count = LOGCPUMAX;
+		else header.count = logRawCount;
+		outraw.write((char*)&header,sizeof(header));
+
+		Bit32u startRaw = logRawWrapped ? logRawCount : 0;
+		Bit32u totalRaw = header.count;
+		for (Bit32u idx=0; idx<totalRaw; idx++) {
+			Bit32u pos = startRaw + idx;
+			if (pos>=LOGCPUMAX) pos-=LOGCPUMAX;
+			outraw.write((char*)&logRawInst[pos],sizeof(TRawInst));
+		}
+		outraw.close();
+		DEBUG_ShowMsg("DEBUG: Raw cpu log LOGCPU_RAW.BIN created\n");
+	} else {
+		DEBUG_ShowMsg("DEBUG: Failed to create raw cpu log LOGCPU_RAW.BIN\n");
+	}
 	DEBUG_ShowMsg("DEBUG: Done.\n");	
 };
 
@@ -2401,5 +2518,3 @@ bool DEBUG_HeavyIsBreakpoint(void) {
 
 
 #endif // DEBUG
-
-
