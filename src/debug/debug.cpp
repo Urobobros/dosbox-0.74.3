@@ -2338,7 +2338,7 @@ static const Bit32u RAW_INST_SIZE = 73; /* Packed size of TRawInst */
 static_assert(sizeof(TRawInst) == RAW_INST_SIZE, "TRawInst packing mismatch");
 
 #ifndef HEAVY_RAW_MAX_MB
-#define HEAVY_RAW_MAX_MB 32
+#define HEAVY_RAW_MAX_MB 0
 #endif
 
 static TRawInst* logRawInst = NULL;
@@ -2346,6 +2346,7 @@ static Bit32u logRawCapacity = 0;
 static Bit32u logRawCount = 0;
 static Bit32u logFlushIndex = 0;
 static bool logRawFlushInProgress = false;
+static bool logRawEnabled = false;
 
 struct RawLogHeader {
 	char   magic[4];
@@ -2366,6 +2367,11 @@ static Bit32u DEBUG_GetHeavyRawCapacity(Bit64u target_bytes) {
 static void DEBUG_InitHeavyRawBuffer(void) {
 	if (logRawInst) return;
 	const Bit64u requested_bytes = static_cast<Bit64u>(HEAVY_RAW_MAX_MB) * 1024u * 1024u;
+	if (requested_bytes == 0) {
+		DEBUG_ShowMsg("DEBUG: Heavy raw logging disabled (HEAVY_RAW_MAX_MB=0).\n");
+		logRawEnabled = false;
+		return;
+	}
 	logRawCapacity = DEBUG_GetHeavyRawCapacity(requested_bytes);
 	logRawInst = new (std::nothrow) TRawInst[logRawCapacity];
 	if (!logRawInst) {
@@ -2387,6 +2393,7 @@ static void DEBUG_InitHeavyRawBuffer(void) {
 	logRawCount = 0;
 	logRawSeq = 0;
 	logFlushIndex = 0;
+	logRawEnabled = true;
 }
 
 static bool DEBUG_WriteRawLogFile(const char* filename) {
@@ -2446,7 +2453,7 @@ static bool DEBUG_WriteTextSnapshot(Bit32u flushIndex) {
 }
 
 static void DEBUG_BlockingFlushRawLog(Bit32u flushIndex = 0) {
-	if (!logRawInst || logRawCount == 0) return;
+	if (!logRawEnabled || !logRawInst || logRawCount == 0) return;
 	if (logRawFlushInProgress) return;
 	logRawFlushInProgress = true;
 	if (flushIndex == 0) flushIndex = logFlushIndex + 1;
@@ -2463,7 +2470,7 @@ static void DEBUG_BlockingFlushRawLog(Bit32u flushIndex = 0) {
 }
 
 void DEBUG_HeavyLogInstruction(void) {
-	if (!logRawInst) DEBUG_InitHeavyRawBuffer();
+	if (!logRawEnabled && !logRawInst) DEBUG_InitHeavyRawBuffer();
 
 	PhysPt start = GetAddress(SegValue(cs),reg_eip);
 	char dline[200];
@@ -2501,44 +2508,49 @@ void DEBUG_HeavyLogInstruction(void) {
 	inst.p    = get_PF()>0;
 	inst.i    = GETFLAGBOOL(IF);
 
-	if (logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
-	TRawInst & raw = logRawInst[logRawCount++];
-	raw.s_cs = inst.s_cs;
-	raw.eip  = inst.eip;
-	raw.seq  = logRawSeq++;
-	raw.len  = (Bit8u)((size>15) ? 15 : size);
-	for (Bit8u i=0;i<raw.len;i++) {
-		Bit8u value=0;
-		if (mem_readb_checked(start+i,&value)) value = 0;
-		raw.bytes[i]=value;
+	if (logRawEnabled && logRawInst) {
+		if (logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
+		TRawInst & raw = logRawInst[logRawCount++];
+		raw.s_cs = inst.s_cs;
+		raw.eip  = inst.eip;
+		raw.seq  = logRawSeq++;
+		raw.len  = (Bit8u)((size>15) ? 15 : size);
+		for (Bit8u i=0;i<raw.len;i++) {
+			Bit8u value=0;
+			if (mem_readb_checked(start+i,&value)) value = 0;
+			raw.bytes[i]=value;
+		}
+		if (raw.len<15) for (Bit8u i=raw.len;i<15;i++) raw.bytes[i]=0;
+		raw.eax = reg_eax;
+		raw.ebx = reg_ebx;
+		raw.ecx = reg_ecx;
+		raw.edx = reg_edx;
+		raw.esi = reg_esi;
+		raw.edi = reg_edi;
+		raw.ebp = reg_ebp;
+		raw.esp = reg_esp;
+		raw.s_ds = SegValue(ds);
+		raw.s_es = SegValue(es);
+		raw.s_fs = SegValue(fs);
+		raw.s_gs = SegValue(gs);
+		raw.s_ss = SegValue(ss);
+		raw.flags = 0;
+		raw.flags |= (get_CF()>0) ? 0x01 : 0;
+		raw.flags |= (get_ZF()>0) ? 0x02 : 0;
+		raw.flags |= (get_SF()>0) ? 0x04 : 0;
+		raw.flags |= (get_OF()>0) ? 0x08 : 0;
+		raw.flags |= (get_AF()>0) ? 0x10 : 0;
+		raw.flags |= (get_PF()>0) ? 0x20 : 0;
+		raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
 	}
-	if (raw.len<15) for (Bit8u i=raw.len;i<15;i++) raw.bytes[i]=0;
-	raw.eax = reg_eax;
-	raw.ebx = reg_ebx;
-	raw.ecx = reg_ecx;
-	raw.edx = reg_edx;
-	raw.esi = reg_esi;
-	raw.edi = reg_edi;
-	raw.ebp = reg_ebp;
-	raw.esp = reg_esp;
-	raw.s_ds = SegValue(ds);
-	raw.s_es = SegValue(es);
-	raw.s_fs = SegValue(fs);
-	raw.s_gs = SegValue(gs);
-	raw.s_ss = SegValue(ss);
-	raw.flags = 0;
-	raw.flags |= (get_CF()>0) ? 0x01 : 0;
-	raw.flags |= (get_ZF()>0) ? 0x02 : 0;
-	raw.flags |= (get_SF()>0) ? 0x04 : 0;
-	raw.flags |= (get_OF()>0) ? 0x08 : 0;
-	raw.flags |= (get_AF()>0) ? 0x10 : 0;
-	raw.flags |= (get_PF()>0) ? 0x20 : 0;
-	raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
-
 	if (++logCount >= LOGCPUMAX) logCount = 0;
 };
 
 void DEBUG_HeavyWriteLogInstruction(void) {
+	if (!logRawEnabled) {
+		DEBUG_ShowMsg("DEBUG: Heavy raw logging disabled; nothing to flush.\n");
+		return;
+	}
 	Bit32u flushIndex = logFlushIndex + 1;
 	DEBUG_BlockingFlushRawLog(flushIndex);
 	DEBUG_ShowMsg("DEBUG: Done.\n");	
