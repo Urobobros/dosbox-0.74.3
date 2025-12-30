@@ -148,8 +148,16 @@ bool DumpLinearMemory(const std::string &trigger_name) {
 }
 
 void PerformMemDump(const std::string &trigger_name) {
-	if (g_dumped || !g_enabled)
+	if (g_dumped) {
+		LOG_MSG("MEMDUMP: skipping dump for trigger=%s (already dumped)",
+		        trigger_name.c_str());
 		return;
+	}
+	if (!g_enabled) {
+		LOG_MSG("MEMDUMP: skipping dump for trigger=%s (memdump disabled)",
+		        trigger_name.c_str());
+		return;
+	}
 
 	if (!DumpLinearMemory(trigger_name))
 		return;
