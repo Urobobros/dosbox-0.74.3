@@ -28,6 +28,8 @@
 #include <iomanip>
 #include <string>
 #include <sstream>
+#include <limits>
+#include <new>
 using namespace std;
 
 #include "debug.h"
@@ -2352,17 +2354,33 @@ struct RawLogHeader {
 	Bit32u count;
 };
 
-static Bit32u DEBUG_GetHeavyRawCapacity(void) {
-	const Bit64u bytes = static_cast<Bit64u>(HEAVY_RAW_MAX_MB) * 1024u * 1024u;
-	Bit32u records = static_cast<Bit32u>(bytes / RAW_INST_SIZE);
+static Bit32u DEBUG_GetHeavyRawCapacity(Bit64u target_bytes) {
+	const Bit64u max_records_by_size = static_cast<Bit64u>(std::numeric_limits<size_t>::max() / sizeof(TRawInst));
+	Bit64u records = target_bytes / RAW_INST_SIZE;
 	if (records == 0) records = 1;
-	return records;
+	if (records > max_records_by_size) records = max_records_by_size;
+	if (records > std::numeric_limits<Bit32u>::max()) records = std::numeric_limits<Bit32u>::max();
+	return static_cast<Bit32u>(records);
 }
 
 static void DEBUG_InitHeavyRawBuffer(void) {
 	if (logRawInst) return;
-	logRawCapacity = DEBUG_GetHeavyRawCapacity();
-	logRawInst = new TRawInst[logRawCapacity];
+	const Bit64u requested_bytes = static_cast<Bit64u>(HEAVY_RAW_MAX_MB) * 1024u * 1024u;
+	logRawCapacity = DEBUG_GetHeavyRawCapacity(requested_bytes);
+	logRawInst = new (std::nothrow) TRawInst[logRawCapacity];
+	if (!logRawInst) {
+		/* Fallback to a smaller buffer if the requested size cannot be allocated. */
+		const Bit64u fallback_bytes = static_cast<Bit64u>(32) * 1024u * 1024u;
+		logRawCapacity = DEBUG_GetHeavyRawCapacity(fallback_bytes);
+		logRawInst = new (std::nothrow) TRawInst[logRawCapacity];
+		if (!logRawInst) {
+			E_Exit("Failed to allocate heavy raw cpu log buffer");
+		} else {
+			DEBUG_ShowMsg("DEBUG: Raw buffer reduced to %u records (~%u MB).\n",
+			              logRawCapacity,
+			              (unsigned int)((static_cast<Bit64u>(logRawCapacity) * RAW_INST_SIZE) / (1024u * 1024u)));
+		}
+	}
 	logRawCount = 0;
 	logRawSeq = 0;
 	logRawFileIndex = 0;
