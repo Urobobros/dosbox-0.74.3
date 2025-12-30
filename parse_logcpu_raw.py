@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import glob
 import struct
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 MAGIC = b"HRAW"
 # Header: magic[4], Bit32u version, Bit32u record_size, Bit32u count
@@ -54,7 +55,7 @@ class HeavyRawInst:
         seq_prefix = "" if self.seq is None else f"seq={self.seq} "
         return f"{seq_prefix}{self.cs_eip_str()} len={self.length:02d} bytes={self.opcode_hex():<47} flags={self.flags_bits():<15} {regs}"
 
-def read_header(f) -> Tuple[int, int]:
+def read_header(f) -> Tuple[int, int, int]:
     data = f.read(HEADER_STRUCT.size)
     if len(data) != HEADER_STRUCT.size:
         raise ValueError("File too short for header")
@@ -69,7 +70,7 @@ def read_header(f) -> Tuple[int, int]:
             raise ValueError(f"Unexpected record size {record_size}, expected {EXPECTED_RECORD_SIZE_V2} for v2")
     else:
         raise ValueError(f"Unsupported version {version}")
-    return count, version
+    return count, version, record_size
 
 def read_records(f, count: int, version: int) -> List[HeavyRawInst]:
     recs: List[HeavyRawInst] = []
@@ -100,6 +101,41 @@ def read_records(f, count: int, version: int) -> List[HeavyRawInst]:
             flags=flags,
         ))
     return recs
+
+def _expand_inputs(paths: Sequence[str]) -> List[str]:
+    expanded: List[str] = []
+    for p in paths:
+        matches = sorted(glob.glob(p))
+        if not matches:
+            raise FileNotFoundError(f"No files match '{p}'")
+        expanded.extend(matches)
+    # Preserve original ordering with glob-sorted groups while deduplicating
+    uniq: List[str] = []
+    seen = set()
+    for path in expanded:
+        if path not in seen:
+            seen.add(path)
+            uniq.append(path)
+    return uniq
+
+def load_records(inputs: Sequence[str]) -> Tuple[List[HeavyRawInst], int]:
+    files = _expand_inputs(inputs)
+    all_recs: List[HeavyRawInst] = []
+    expected_version: Optional[int] = None
+    expected_record_size: Optional[int] = None
+    for path in files:
+        with open(path, 'rb') as fh:
+            count, version, record_size = read_header(fh)
+            if expected_version is None:
+                expected_version = version
+                expected_record_size = record_size
+            else:
+                if version != expected_version or record_size != expected_record_size:
+                    raise ValueError(f"Incompatible file {path}: version={version}, record_size={record_size}, expected version={expected_version}, record_size={expected_record_size}")
+            all_recs.extend(read_records(fh, count, version))
+    if expected_version is None:
+        raise ValueError("No input records loaded")
+    return all_recs, expected_version
 
 def parse_cs_eip(arg: str) -> Tuple[int, int]:
     if ':' not in arg:
@@ -178,8 +214,8 @@ def write_export_csv(path: str, items: Iterable[Tuple[HeavyRawInst,str,str]]) ->
             ])
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Parse DOSBox-X LOGCPU_RAW.BIN")
-    ap.add_argument('input', help="Path to LOGCPU_RAW.BIN")
+    ap = argparse.ArgumentParser(description="Parse DOSBox-X LOGCPU_RAW.BIN files (supports multiple inputs or globs)")
+    ap.add_argument('inputs', nargs='+', help="Path(s) or glob(s) to LOGCPU_RAW_*.BIN")
     ap.add_argument('--csv', help="Write CSV output to file")
     ap.add_argument('--export-csv', help="Write disassembly-friendly CSV (requires --disasm)")
     ap.add_argument('--from', dest='from_addr', help="Start address filter CS:EIP (hex)")
@@ -193,9 +229,7 @@ def main() -> None:
     start_addr = parse_cs_eip(args.from_addr) if args.from_addr else None
     end_addr = parse_cs_eip(args.to_addr) if args.to_addr else None
 
-    with open(args.input, 'rb') as fh:
-        count, version = read_header(fh)
-        records = read_records(fh, count, version)
+    records, version = load_records(args.inputs)
 
     filtered = list(range_filter(records, start_addr, end_addr))
     if args.from_seq is not None or args.to_seq is not None:
