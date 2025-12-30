@@ -11,12 +11,15 @@ MAGIC = b"HRAW"
 HEADER_STRUCT = struct.Struct('<4sIII')
 RECORD_STRUCT_V1 = struct.Struct('<H I B 15s I I I I I I I I H H H H H B')
 RECORD_STRUCT_V2 = struct.Struct('<Q H I B 15s I I I I I I I I H H H H H B')
+RECORD_STRUCT_V3 = struct.Struct('<Q I H I B 15s I I I I I I I I H H H H H B')
 EXPECTED_RECORD_SIZE_V1 = RECORD_STRUCT_V1.size
 EXPECTED_RECORD_SIZE_V2 = RECORD_STRUCT_V2.size
+EXPECTED_RECORD_SIZE_V3 = RECORD_STRUCT_V3.size
 
 @dataclass
 class HeavyRawInst:
     seq: Optional[int]
+    linear: Optional[int]
     cs: int
     eip: int
     length: int
@@ -53,7 +56,8 @@ class HeavyRawInst:
                 f"EBP={self.ebp:08X} ESP={self.esp:08X} DS={self.ds:04X} "
                 f"ES={self.es:04X} FS={self.fs:04X} GS={self.gs:04X} SS={self.ss:04X}")
         seq_prefix = "" if self.seq is None else f"seq={self.seq} "
-        return f"{seq_prefix}{self.cs_eip_str()} len={self.length:02d} bytes={self.opcode_hex():<47} flags={self.flags_bits():<15} {regs}"
+        linear_prefix = "" if self.linear is None else f"linear={self.linear:08X} "
+        return f"{seq_prefix}{linear_prefix}{self.cs_eip_str()} len={self.length:02d} bytes={self.opcode_hex():<47} flags={self.flags_bits():<15} {regs}"
 
 def read_header(f) -> Tuple[int, int, int]:
     data = f.read(HEADER_STRUCT.size)
@@ -68,13 +72,24 @@ def read_header(f) -> Tuple[int, int, int]:
     elif version == 2:
         if record_size != EXPECTED_RECORD_SIZE_V2:
             raise ValueError(f"Unexpected record size {record_size}, expected {EXPECTED_RECORD_SIZE_V2} for v2")
+    elif version == 3:
+        if record_size != EXPECTED_RECORD_SIZE_V3:
+            raise ValueError(f"Unexpected record size {record_size}, expected {EXPECTED_RECORD_SIZE_V3} for v3")
     else:
         raise ValueError(f"Unsupported version {version}")
     return count, version, record_size
 
 def read_records(f, count: int, version: int) -> List[HeavyRawInst]:
     recs: List[HeavyRawInst] = []
-    rec_struct = RECORD_STRUCT_V1 if version == 1 else RECORD_STRUCT_V2
+    if version == 1:
+        rec_struct = RECORD_STRUCT_V1
+    elif version == 2:
+        rec_struct = RECORD_STRUCT_V2
+    elif version == 3:
+        rec_struct = RECORD_STRUCT_V3
+    else:
+        raise ValueError(f"Unsupported version {version}")
+
     expected = rec_struct.size
     for idx in range(count):
         data = f.read(expected)
@@ -85,12 +100,19 @@ def read_records(f, count: int, version: int) -> List[HeavyRawInst]:
              eax, ebx, ecx, edx, esi, edi, ebp, esp,
              ds, es, fs, gs, ss, flags) = rec_struct.unpack(data)
             seq = None
-        else:
+            linear = None
+        elif version == 2:
             (seq, cs, eip, length, bytes_blob,
+             eax, ebx, ecx, edx, esi, edi, ebp, esp,
+             ds, es, fs, gs, ss, flags) = rec_struct.unpack(data)
+            linear = None
+        else:
+            (seq, linear, cs, eip, length, bytes_blob,
              eax, ebx, ecx, edx, esi, edi, ebp, esp,
              ds, es, fs, gs, ss, flags) = rec_struct.unpack(data)
         recs.append(HeavyRawInst(
             seq=seq,
+            linear=linear,
             cs=cs,
             eip=eip,
             length=length,
@@ -165,10 +187,12 @@ def write_csv(path: str, records: Iterable[HeavyRawInst]) -> None:
     with open(path, 'w', newline='') as fh:
         writer = csv.writer(fh)
         writer.writerow([
-            'cs','eip','len','bytes','eax','ebx','ecx','edx','esi','edi','ebp','esp','ds','es','fs','gs','ss','flags'
+            'seq','linear','cs','eip','len','bytes','eax','ebx','ecx','edx','esi','edi','ebp','esp','ds','es','fs','gs','ss','flags'
         ])
         for r in records:
             writer.writerow([
+                '' if r.seq is None else r.seq,
+                '' if r.linear is None else f"{r.linear:08X}",
                 f"{r.cs:04X}", f"{r.eip:08X}", r.length,
                 r.opcode_hex(),
                 f"{r.eax:08X}", f"{r.ebx:08X}", f"{r.ecx:08X}", f"{r.edx:08X}",
@@ -206,10 +230,11 @@ def disasm_records(records: Iterable[HeavyRawInst], mode_bits: int):
 def write_export_csv(path: str, items: Iterable[Tuple[HeavyRawInst,str,str]]) -> None:
     with open(path, 'w', newline='') as fh:
         writer = csv.writer(fh)
-        writer.writerow(['seq','cs','eip','bytes','mnemonic','operands'])
+        writer.writerow(['seq','linear','cs','eip','bytes','mnemonic','operands'])
         for rec, mnemonic, op_str in items:
             writer.writerow([
                 '' if rec.seq is None else rec.seq,
+                '' if rec.linear is None else f"{rec.linear:08X}",
                 f"{rec.cs:04X}", f"{rec.eip:08X}", rec.opcode_hex(), mnemonic, op_str
             ])
 
@@ -250,8 +275,9 @@ def main() -> None:
             dump_records(filtered)
         else:
             for rec, mnem, op_str in items:
-                prefix = "" if rec.seq is None else f"{rec.seq}: "
-                print(f"{prefix}{rec.cs_eip_str()} {mnem} {op_str}")
+                seq_prefix = "" if rec.seq is None else f"{rec.seq}: "
+                linear_prefix = "" if rec.linear is None else f"[{rec.linear:08X}] "
+                print(f"{seq_prefix}{linear_prefix}{rec.cs_eip_str()} {mnem} {op_str}")
 
 if __name__ == '__main__':
     main()
