@@ -198,6 +198,11 @@ void MEMDUMP_Init(Section *sec) {
 void MEMDUMP_OnProtectedModeEntry(void) {
 	if (g_trigger != MemDumpTrigger::MEMDUMP_TRIGGER_ON_PM_ENTRY)
 		return;
+	if (g_dumped) {
+		LOG_MSG("MEMDUMP: protected mode entry detected but dump already taken "
+		        "(trigger=%s)", g_trigger_name.c_str());
+		return;
+	}
 	LOG_MSG("MEMDUMP: protected mode entry detected (trigger=%s, enabled=%s)",
 	        g_trigger_name.c_str(), g_enabled ? "yes" : "no");
 	PerformMemDump(g_trigger_name);
@@ -205,6 +210,10 @@ void MEMDUMP_OnProtectedModeEntry(void) {
 
 bool MEMDUMP_IsEnabled(void) {
 	return g_enabled;
+}
+
+bool MEMDUMP_HasDumped(void) {
+	return g_dumped;
 }
 
 std::string MEMDUMP_CurrentTriggerName(void) {

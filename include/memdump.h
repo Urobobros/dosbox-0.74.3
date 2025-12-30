@@ -13,6 +13,7 @@ enum class MemDumpTrigger {
 void MEMDUMP_Init(Section *sec);
 void MEMDUMP_OnProtectedModeEntry(void);
 bool MEMDUMP_IsEnabled(void);
+bool MEMDUMP_HasDumped(void);
 std::string MEMDUMP_CurrentTriggerName(void);
 
 #endif

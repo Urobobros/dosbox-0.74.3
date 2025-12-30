@@ -1557,7 +1557,7 @@ void CPU_SET_CRX(Bitu cr,Bitu value) {
 				LOG(LOG_CPU,LOG_NORMAL)("Protected mode");
 				PAGING_Enable((value & CR0_PAGING)>0);
 
-				if (MEMDUMP_IsEnabled()) {
+				if (MEMDUMP_IsEnabled() && !MEMDUMP_HasDumped()) {
 					LOG_MSG("MEMDUMP: CR0 set PE=1 (was_pmode=%s, trigger=%s)",
 					        was_pmode ? "yes" : "no",
 					        MEMDUMP_CurrentTriggerName().c_str());
