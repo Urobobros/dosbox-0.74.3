@@ -1584,6 +1584,11 @@ void CPU_SET_CRX(Bitu cr,Bitu value) {
 				}
 #endif
 				CPU_AutoDetermineMode<<=CPU_AUTODETERMINE_SHIFT;
+				if (MEMDUMP_IsEnabled()) {
+					LOG_MSG("MEMDUMP: CR0 set PE=1 (was_pmode=%s, trigger=%s)",
+					        was_pmode ? "yes" : "no",
+					        MEMDUMP_CurrentTriggerName().c_str());
+				}
 				if (!was_pmode)
 					MEMDUMP_OnProtectedModeEntry();
 			} else {
