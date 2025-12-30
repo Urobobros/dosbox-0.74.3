@@ -42,6 +42,7 @@
 #include "mapper.h"
 #include "ints/int10.h"
 #include "render.h"
+#include "memdump.h"
 
 Config * control;
 MachineType machine;
@@ -73,6 +74,7 @@ void DMA_Init(Section*);
 void MIXER_Init(Section*);
 void MIDI_Init(Section*);
 void HARDWARE_Init(Section*);
+void MEMDUMP_Init(Section*);
 
 
 void KEYBOARD_Init(Section*);	//TODO This should setup INT 16 too but ok ;)
@@ -519,6 +521,18 @@ void DOSBOX_Init(void) {
 	secprop->AddInitFunction(&DMA_Init);//done
 	secprop->AddInitFunction(&VGA_Init);
 	secprop->AddInitFunction(&KEYBOARD_Init);
+
+	secprop=control->AddSection_prop("memdump",&MEMDUMP_Init,true);
+	Pbool = secprop->Add_bool("enabled",Property::Changeable::OnlyAtStart,false);
+	Pbool->Set_help("Dump emulated linear memory to a binary file when a trigger fires.");
+	const char* memdump_triggers[] = { "on_pm_entry", 0};
+	Pstring = secprop->Add_string("trigger",Property::Changeable::OnlyAtStart,"on_pm_entry");
+	Pstring->Set_values(memdump_triggers);
+	Pstring->Set_help("Trigger condition for memory dumping. on_pm_entry fires when CR0 enables protected mode.");
+	Pstring = secprop->Add_string("output",Property::Changeable::OnlyAtStart,"spellcross_memdump.bin");
+	Pstring->Set_help("File path for the linear memory dump.");
+	Pstring = secprop->Add_string("descriptor_log",Property::Changeable::OnlyAtStart,"spellcross_descriptors.txt");
+	Pstring->Set_help("File path for descriptor table metadata captured with the dump.");
 
 	secprop=control->AddSection_prop("mixer",&MIXER_Init);
 	Pbool = secprop->Add_bool("nosound",Property::Changeable::OnlyAtStart,false);
