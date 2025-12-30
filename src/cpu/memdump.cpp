@@ -3,7 +3,6 @@
 #include <fstream>
 #include <iomanip>
 #include <string>
-#include <strings.h>
 
 #include "cpu.h"
 #include "logging.h"
@@ -25,7 +24,7 @@ bool g_dumped = false;
 constexpr size_t kChunkSize = 1 << 20; // 1 MiB chunks to avoid long blocking writes
 
 void WriteGdtEntry(std::ofstream &out, const char *label, Bitu selector,
-                   const Descriptor &desc) {
+                   Descriptor &desc) {
 	out << std::hex << std::setw(4) << std::setfill('0') << selector << "  "
 	    << "base=0x" << std::setw(8) << desc.GetBase() << "  "
 	    << "limit=0x" << std::setw(8) << desc.GetLimit() << "  "
@@ -36,7 +35,7 @@ void WriteGdtEntry(std::ofstream &out, const char *label, Bitu selector,
 	    << label << "\n";
 }
 
-void WriteIdtEntry(std::ofstream &out, Bitu selector, const Descriptor &desc) {
+void WriteIdtEntry(std::ofstream &out, Bitu selector, Descriptor &desc) {
 	out << std::hex << std::setw(4) << std::setfill('0') << selector << "  "
 	    << "offset=0x" << std::setw(8) << desc.GetOffset() << "  "
 	    << "selector=0x" << std::setw(4) << desc.GetSelector() << "  "
