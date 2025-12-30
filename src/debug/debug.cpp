@@ -2347,6 +2347,7 @@ static Bit32u logRawCount = 0;
 static Bit32u logFlushIndex = 0;
 static bool logRawFlushInProgress = false;
 static bool logRawEnabled = false;
+static bool logTextEnabled = true;
 
 struct RawLogHeader {
 	char   magic[4];
@@ -2370,6 +2371,7 @@ static void DEBUG_InitHeavyRawBuffer(void) {
 	if (requested_bytes == 0) {
 		DEBUG_ShowMsg("DEBUG: Heavy raw logging disabled (HEAVY_RAW_MAX_MB=0).\n");
 		logRawEnabled = false;
+		logTextEnabled = false;
 		return;
 	}
 	logRawCapacity = DEBUG_GetHeavyRawCapacity(requested_bytes);
@@ -2408,6 +2410,7 @@ static bool DEBUG_WriteRawLogFile(const char* filename) {
 }
 
 static bool DEBUG_WriteTextSnapshotRaw(Bit32u flushIndex) {
+	if (!logTextEnabled) return true;
 	char int_filename[32];
 	snprintf(int_filename,sizeof(int_filename),"LOGCPU_INT_CD_%04u.TXT",flushIndex);
 	ofstream out(int_filename);
@@ -2453,6 +2456,7 @@ static bool DEBUG_WriteTextSnapshotRaw(Bit32u flushIndex) {
 }
 
 static bool DEBUG_WriteTextSnapshotLogInst(Bit32u flushIndex) {
+	if (!logTextEnabled) return true;
 	char int_filename[32];
 	snprintf(int_filename,sizeof(int_filename),"LOGCPU_INT_CD_%04u.TXT",flushIndex);
 	ofstream out(int_filename);
