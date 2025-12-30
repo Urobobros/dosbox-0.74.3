@@ -27,6 +27,7 @@
 #include "callback.h"
 #include "debug.h"
 #include "cpu.h"
+#include "support.h"
 
 const char * RunningProgram="DOSBOX";
 
@@ -258,6 +259,16 @@ bool DOS_Execute(char * name,PhysPt block_pt,Bit8u flags) {
 	Bit16u pspseg,envseg,loadseg,memsize,readsize;
 	PhysPt loadaddress;RealPt relocpt;
 	Bitu headersize=0,imagesize=0;
+#if C_HEAVY_DEBUG
+	char heavyExePath[DOS_PATHLENGTH];
+	heavyExePath[0] = 0;
+	if (!DOS_Canonicalize(name,heavyExePath)) {
+		safe_strncpy(heavyExePath,name,sizeof(heavyExePath));
+		heavyExePath[sizeof(heavyExePath)-1] = 0;
+	}
+	Bit16u heavyParentPsp = dos.psp();
+	ExeType heavyExeType = EXE_UNKNOWN;
+#endif
 	DOS_ParamBlock block(block_pt);
 
 	block.LoadData();
@@ -304,8 +315,32 @@ bool DOS_Execute(char * name,PhysPt block_pt,Bit8u flags) {
 			headersize = head.headersize*16;
 			imagesize = head.pages*512-headersize; 
 			if (imagesize+headersize<512) imagesize = 512-headersize;
+#if C_HEAVY_DEBUG
+			Bit32u file_size = head.pages*512u;
+			if (head.extrabytes) file_size -= (512u - head.extrabytes);
+
+			Bit32u e_lfanew = 0;
+			pos = 0x3c; len = sizeof(Bit32u);
+			if (DOS_SeekFile(fhandle,&pos,DOS_SEEK_SET) && DOS_ReadFile(fhandle,(Bit8u *)&e_lfanew,&len) && len==sizeof(Bit32u)) {
+				e_lfanew = host_readd((HostPt)&e_lfanew);
+				if (e_lfanew && (e_lfanew+2 < file_size)) {
+					Bit16u le_sig = 0;
+					pos = e_lfanew; len = sizeof(Bit16u);
+					if (DOS_SeekFile(fhandle,&pos,DOS_SEEK_SET) && DOS_ReadFile(fhandle,(Bit8u *)&le_sig,&len) && len==sizeof(Bit16u)) {
+						le_sig = host_readw((HostPt)&le_sig);
+						if (le_sig == 0x454c) heavyExeType = EXE_LE_DOS4GW; /* "LE" */
+						else if (le_sig == 0x584c) heavyExeType = EXE_LX_DOS4GW; /* "LX" */
+						else heavyExeType = EXE_MZ_REALMODE;
+					}
+				} else heavyExeType = EXE_MZ_REALMODE;
+			} else heavyExeType = EXE_MZ_REALMODE;
+			pos = len=0; /* reset vars to avoid accidental reuse */
+#endif
 		}
 	}
+#if C_HEAVY_DEBUG
+	if (iscom && heavyExeType==EXE_UNKNOWN) heavyExeType = EXE_MZ_REALMODE;
+#endif
 	Bit8u * loadbuf=(Bit8u *)new Bit8u[0x10000];
 	if (flags!=OVERLAY) {
 		/* Create an environment block */
@@ -439,6 +474,9 @@ bool DOS_Execute(char * name,PhysPt block_pt,Bit8u flags) {
 		block.exec.initsssp = sssp-2;
 		block.exec.initcsip = csip;
 		block.SaveData();
+#if C_HEAVY_DEBUG
+		DEBUG_UpdateHeavyExeInfo(heavyExePath,pspseg,loadseg,headersize,!iscom,newpsp.GetParent(),heavyExeType);
+#endif
 		return true;
 	}
 
@@ -499,6 +537,9 @@ bool DOS_Execute(char * name,PhysPt block_pt,Bit8u flags) {
 		DOS_MCB pspmcb(dos.psp()-1);
 		pspmcb.SetFileName(stripname);
 		DOS_UpdatePSPName();
+#if C_HEAVY_DEBUG
+		DEBUG_UpdateHeavyExeInfo(heavyExePath,pspseg,loadseg,headersize,!iscom,newpsp.GetParent(),heavyExeType);
+#endif
 		return true;
 	}
 	return false;
