@@ -28,6 +28,7 @@
 #include <iomanip>
 #include <string>
 #include <sstream>
+#include <cstdlib>
 using namespace std;
 
 #include "debug.h"
@@ -2279,6 +2280,9 @@ static Bit32u logCount = 0;
 static Bit32u logRawCount = 0;
 static bool   logRawWrapped = false;
 static Bit64u logRawSeq = 0;
+static Bit32u logRawCapacity = LOGCPUMAX;
+static bool   logRawConfigured = false;
+static bool   heavyRawEnabled = true;
 
 struct TLogInst {
 	Bit16u s_cs;
@@ -2339,7 +2343,40 @@ static_assert(sizeof(TRawInst) == RAW_INST_SIZE, "TRawInst packing mismatch");
 
 static TRawInst logRawInst[LOGCPUMAX];
 
+static Bit32u CalculateRawCapacityFromMb(long megabytes) {
+	if (megabytes <= 0) return 0;
+	/* Keep the calculation in 64-bit to avoid overflows when the env var is big. */
+	Bit64u max_bytes = static_cast<Bit64u>(megabytes) * 1024u * 1024u;
+	Bit64u max_records = max_bytes / RAW_INST_SIZE;
+	if (max_records == 0) return 0;
+	if (max_records > LOGCPUMAX) return LOGCPUMAX;
+	return static_cast<Bit32u>(max_records);
+}
+
+static void ConfigureHeavyRawLogging(void) {
+	if (logRawConfigured) return;
+	logRawConfigured = true;
+
+	const char * raw_limit_env = getenv("HEAVY_RAW_MAX_MB");
+	if (!raw_limit_env || !*raw_limit_env) return;
+
+	char * end = nullptr;
+	long env_value = strtol(raw_limit_env, &end, 10);
+	if (end == raw_limit_env) return; /* not a number */
+
+	Bit32u capacity = CalculateRawCapacityFromMb(env_value);
+	if (capacity == 0) {
+		heavyRawEnabled = false;
+		logRawCapacity = 0;
+		return;
+	}
+
+	logRawCapacity = capacity;
+}
+
 void DEBUG_HeavyLogInstruction(void) {
+
+	ConfigureHeavyRawLogging();
 
 	PhysPt start = GetAddress(SegValue(cs),reg_eip);
 	char dline[200];
@@ -2377,44 +2414,47 @@ void DEBUG_HeavyLogInstruction(void) {
 	inst.p    = get_PF()>0;
 	inst.i    = GETFLAGBOOL(IF);
 
-	TRawInst & raw = logRawInst[logRawCount];
-	raw.s_cs = inst.s_cs;
-	raw.eip  = inst.eip;
-	raw.seq  = logRawSeq++;
-	raw.len  = (Bit8u)((size>15) ? 15 : size);
-	for (Bit8u i=0;i<raw.len;i++) {
-		Bit8u value=0;
-		if (mem_readb_checked(start+i,&value)) value = 0;
-		raw.bytes[i]=value;
+	if (heavyRawEnabled && logRawCapacity > 0) {
+		TRawInst & raw = logRawInst[logRawCount];
+		raw.s_cs = inst.s_cs;
+		raw.eip  = inst.eip;
+		raw.seq  = logRawSeq++;
+		raw.len  = (Bit8u)((size>15) ? 15 : size);
+		for (Bit8u i=0;i<raw.len;i++) {
+			Bit8u value=0;
+			if (mem_readb_checked(start+i,&value)) value = 0;
+			raw.bytes[i]=value;
+		}
+		if (raw.len<15) for (Bit8u i=raw.len;i<15;i++) raw.bytes[i]=0;
+		raw.eax = reg_eax;
+		raw.ebx = reg_ebx;
+		raw.ecx = reg_ecx;
+		raw.edx = reg_edx;
+		raw.esi = reg_esi;
+		raw.edi = reg_edi;
+		raw.ebp = reg_ebp;
+		raw.esp = reg_esp;
+		raw.s_ds = SegValue(ds);
+		raw.s_es = SegValue(es);
+		raw.s_fs = SegValue(fs);
+		raw.s_gs = SegValue(gs);
+		raw.s_ss = SegValue(ss);
+		raw.flags = 0;
+		raw.flags |= (get_CF()>0) ? 0x01 : 0;
+		raw.flags |= (get_ZF()>0) ? 0x02 : 0;
+		raw.flags |= (get_SF()>0) ? 0x04 : 0;
+		raw.flags |= (get_OF()>0) ? 0x08 : 0;
+		raw.flags |= (get_AF()>0) ? 0x10 : 0;
+		raw.flags |= (get_PF()>0) ? 0x20 : 0;
+		raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
+
+		if (++logRawCount >= logRawCapacity) {
+			logRawCount = 0;
+			logRawWrapped = true;
+		}
 	}
-	if (raw.len<15) for (Bit8u i=raw.len;i<15;i++) raw.bytes[i]=0;
-	raw.eax = reg_eax;
-	raw.ebx = reg_ebx;
-	raw.ecx = reg_ecx;
-	raw.edx = reg_edx;
-	raw.esi = reg_esi;
-	raw.edi = reg_edi;
-	raw.ebp = reg_ebp;
-	raw.esp = reg_esp;
-	raw.s_ds = SegValue(ds);
-	raw.s_es = SegValue(es);
-	raw.s_fs = SegValue(fs);
-	raw.s_gs = SegValue(gs);
-	raw.s_ss = SegValue(ss);
-	raw.flags = 0;
-	raw.flags |= (get_CF()>0) ? 0x01 : 0;
-	raw.flags |= (get_ZF()>0) ? 0x02 : 0;
-	raw.flags |= (get_SF()>0) ? 0x04 : 0;
-	raw.flags |= (get_OF()>0) ? 0x08 : 0;
-	raw.flags |= (get_AF()>0) ? 0x10 : 0;
-	raw.flags |= (get_PF()>0) ? 0x20 : 0;
-	raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
 
 	if (++logCount >= LOGCPUMAX) logCount = 0;
-	if (++logRawCount >= LOGCPUMAX) {
-		logRawCount = 0;
-		logRawWrapped = true;
-	}
 };
 
 void DEBUG_HeavyWriteLogInstruction(void) {
@@ -2459,30 +2499,33 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 	
 	out.close();
 
-	struct RawLogHeader {
-		char   magic[4];
-		Bit32u version;
-		Bit32u record_size;
-		Bit32u count;
-	} header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, 0 };
+	ConfigureHeavyRawLogging();
+	if (heavyRawEnabled && logRawCapacity > 0) {
+		struct RawLogHeader {
+			char   magic[4];
+			Bit32u version;
+			Bit32u record_size;
+			Bit32u count;
+		} header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, 0 };
 
-	ofstream outraw("LOGCPU_RAW.BIN",ios::binary);
-	if (outraw.is_open()) {
-		if (logRawWrapped) header.count = LOGCPUMAX;
-		else header.count = logRawCount;
-		outraw.write((char*)&header,sizeof(header));
+		ofstream outraw("LOGCPU_RAW.BIN",ios::binary);
+		if (outraw.is_open()) {
+			if (logRawWrapped) header.count = logRawCapacity;
+			else header.count = logRawCount;
+			outraw.write((char*)&header,sizeof(header));
 
-		Bit32u startRaw = logRawWrapped ? logRawCount : 0;
-		Bit32u totalRaw = header.count;
-		for (Bit32u idx=0; idx<totalRaw; idx++) {
-			Bit32u pos = startRaw + idx;
-			if (pos>=LOGCPUMAX) pos-=LOGCPUMAX;
-			outraw.write((char*)&logRawInst[pos],RAW_INST_SIZE);
+			Bit32u startRaw = logRawWrapped ? logRawCount : 0;
+			Bit32u totalRaw = header.count;
+			for (Bit32u idx=0; idx<totalRaw; idx++) {
+				Bit32u pos = startRaw + idx;
+				if (pos>=logRawCapacity) pos-=logRawCapacity;
+				outraw.write((char*)&logRawInst[pos],RAW_INST_SIZE);
+			}
+			outraw.close();
+			DEBUG_ShowMsg("DEBUG: Raw cpu log LOGCPU_RAW.BIN created\n");
+		} else {
+			DEBUG_ShowMsg("DEBUG: Failed to create raw cpu log LOGCPU_RAW.BIN\n");
 		}
-		outraw.close();
-		DEBUG_ShowMsg("DEBUG: Raw cpu log LOGCPU_RAW.BIN created\n");
-	} else {
-		DEBUG_ShowMsg("DEBUG: Failed to create raw cpu log LOGCPU_RAW.BIN\n");
 	}
 	DEBUG_ShowMsg("DEBUG: Done.\n");	
 };
