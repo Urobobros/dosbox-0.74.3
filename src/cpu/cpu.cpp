@@ -30,6 +30,7 @@
 #include "paging.h"
 #include "lazyflags.h"
 #include "support.h"
+#include "memdump.h"
 
 Bitu DEBUG_EnableDebugger(void);
 extern void GFX_SetTitle(Bit32s cycles ,Bits frameskip,bool paused);
@@ -1547,6 +1548,7 @@ void CPU_SET_CRX(Bitu cr,Bitu value) {
 	switch (cr) {
 	case 0:
 		{
+			const bool was_pmode = cpu.pmode;
 			Bitu changed=cpu.cr0 ^ value;
 			if (!changed) return;
 			cpu.cr0=value;
@@ -1582,6 +1584,8 @@ void CPU_SET_CRX(Bitu cr,Bitu value) {
 				}
 #endif
 				CPU_AutoDetermineMode<<=CPU_AUTODETERMINE_SHIFT;
+				if (!was_pmode)
+					MEMDUMP_OnProtectedModeEntry();
 			} else {
 				cpu.pmode=false;
 				if (value & CR0_PAGING) LOG_MSG("Paging requested without PE=1");

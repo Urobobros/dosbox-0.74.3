@@ -189,6 +189,9 @@
 					RelativePath="..\src\cpu\cpu.cpp">
 				</File>
 				<File
+					RelativePath="..\src\cpu\memdump.cpp">
+				</File>
+				<File
 					RelativePath="..\src\cpu\flags.cpp">
 				</File>
 				<File

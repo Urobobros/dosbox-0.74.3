@@ -1,2 +1,14 @@
 # Visual Studio / MSVC build output
-visualc_net/
+# Ignoruj vše v visualc_net
+visualc_net/*
+
+# Ale samotný adresář neignoruj
+!visualc_net/
+
+# Povol konkrétní soubory
+!visualc_net/dosbox.vcproj
+!visualc_net/dosbox.vcxproj
+!visualc_net/dosbox.vcxproj.filters
+!visualc_net/dosbox.sln
+!visualc_net/Makefile.am
+!visualc_net/Makefile.in

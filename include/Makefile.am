@@ -20,6 +20,7 @@ keyboard.h \
 logging.h \
 mapper.h \
 mem.h \
+memdump.h \
 mixer.h \
 modules.h \
 mouse.h \
@@ -36,4 +37,3 @@ support.h \
 timer.h \
 vga.h \
 video.h
-
