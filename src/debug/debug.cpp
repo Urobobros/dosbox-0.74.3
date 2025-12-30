@@ -28,6 +28,8 @@
 #include <iomanip>
 #include <string>
 #include <sstream>
+#include <limits>
+#include <new>
 using namespace std;
 
 #include "debug.h"
@@ -2276,8 +2278,6 @@ const Bit32u LOGCPUMAX = 20000;
 static Bit16u logCpuCS [LOGCPUMAX];
 static Bit32u logCpuEIP[LOGCPUMAX];
 static Bit32u logCount = 0;
-static Bit32u logRawCount = 0;
-static bool   logRawWrapped = false;
 static Bit64u logRawSeq = 0;
 
 struct TLogInst {
@@ -2337,9 +2337,181 @@ struct TRawInst {
 static const Bit32u RAW_INST_SIZE = 73; /* Packed size of TRawInst */
 static_assert(sizeof(TRawInst) == RAW_INST_SIZE, "TRawInst packing mismatch");
 
-static TRawInst logRawInst[LOGCPUMAX];
+#ifndef HEAVY_RAW_MAX_MB
+#define HEAVY_RAW_MAX_MB 0
+#endif
+
+static TRawInst* logRawInst = NULL;
+static Bit32u logRawCapacity = 0;
+static Bit32u logRawCount = 0;
+static Bit32u logFlushIndex = 0;
+static bool logRawFlushInProgress = false;
+static bool logRawEnabled = false;
+static bool logTextEnabled = true;
+
+struct RawLogHeader {
+	char   magic[4];
+	Bit32u version;
+	Bit32u record_size;
+	Bit32u count;
+};
+
+static Bit32u DEBUG_GetHeavyRawCapacity(Bit64u target_bytes) {
+	const Bit64u max_records_by_size = static_cast<Bit64u>((std::numeric_limits<size_t>::max)() / sizeof(TRawInst));
+	Bit64u records = target_bytes / RAW_INST_SIZE;
+	if (records == 0) records = 1;
+	if (records > max_records_by_size) records = max_records_by_size;
+	if (records > (std::numeric_limits<Bit32u>::max)()) records = (std::numeric_limits<Bit32u>::max)();
+	return static_cast<Bit32u>(records);
+}
+
+static void DEBUG_InitHeavyRawBuffer(void) {
+	if (logRawInst) return;
+	const Bit64u requested_bytes = static_cast<Bit64u>(HEAVY_RAW_MAX_MB) * 1024u * 1024u;
+	if (requested_bytes == 0) {
+		DEBUG_ShowMsg("DEBUG: Heavy raw logging disabled (HEAVY_RAW_MAX_MB=0).\n");
+		logRawEnabled = false;
+		logTextEnabled = false;
+		return;
+	}
+	logRawCapacity = DEBUG_GetHeavyRawCapacity(requested_bytes);
+	logRawInst = new (std::nothrow) TRawInst[logRawCapacity];
+	if (!logRawInst) {
+		/* Fallback to a smaller buffer if the requested size cannot be allocated. */
+		const Bit64u fallback_bytes = static_cast<Bit64u>(32) * 1024u * 1024u;
+		logRawCapacity = DEBUG_GetHeavyRawCapacity(fallback_bytes);
+		logRawInst = new (std::nothrow) TRawInst[logRawCapacity];
+		if (!logRawInst) {
+			E_Exit("Failed to allocate heavy raw cpu log buffer");
+		} else {
+			DEBUG_ShowMsg("DEBUG: Raw buffer reduced to %u records (~%u MB).\n",
+			              logRawCapacity,
+			              (unsigned int)((static_cast<Bit64u>(logRawCapacity) * RAW_INST_SIZE) / (1024u * 1024u)));
+		}
+	}
+	DEBUG_ShowMsg("DEBUG: Heavy raw buffer size %u records (~%u MB).\n",
+	              logRawCapacity,
+	              (unsigned int)((static_cast<Bit64u>(logRawCapacity) * RAW_INST_SIZE) / (1024u * 1024u)));
+	logRawCount = 0;
+	logRawSeq = 0;
+	logFlushIndex = 0;
+	logRawEnabled = true;
+}
+
+static bool DEBUG_WriteRawLogFile(const char* filename) {
+	RawLogHeader header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, logRawCount };
+	ofstream outraw(filename, ios::binary);
+	if (!outraw.is_open()) return false;
+	outraw.write((char*)&header,sizeof(header));
+	outraw.write((char*)logRawInst, RAW_INST_SIZE * header.count);
+	outraw.close();
+	DEBUG_ShowMsg("DEBUG: Raw cpu log %s created\n",filename);
+	return true;
+}
+
+static bool DEBUG_WriteTextSnapshotRaw(Bit32u flushIndex) {
+	if (!logTextEnabled) return true;
+	char int_filename[32];
+	snprintf(int_filename,sizeof(int_filename),"LOGCPU_INT_CD_%04u.TXT",flushIndex);
+	ofstream out(int_filename);
+	if (!out.is_open()) {
+		DEBUG_ShowMsg("DEBUG: Failed to create %s.\n", int_filename);
+		return false;
+	}
+	out << hex << noshowbase << setfill('0') << uppercase;
+	out << "; Program: " << (heavyExePath.empty() ? "<unknown>" : heavyExePath) << endl;
+	out << "; Type: " << GetHeavyExeTypeString(heavyExeType) << endl;
+	out << "; PSP: " << setw(4) << heavyExePspSeg << " Parent: " << setw(4) << heavyExeParentPsp
+	    << " LoadSeg: " << setw(4) << heavyExeLoadSeg << " Format: " << (heavyExeIsExe ? "EXE" : "COM");
+	if (heavyExeIsExe) {
+		out << " (header " << dec << heavyExeHeaderSize << " bytes)" << hex;
+	}
+	out << endl;
+	out << "; Records: " << dec << logRawCount << hex << endl;
+	for (Bit32u idx = 0; idx < logRawCount; idx++) {
+		const TRawInst & raw = logRawInst[idx];
+		out << "seq=" << dec << raw.seq << "  "
+		    << hex << setw(4) << setfill('0') << raw.s_cs << ":" << setw(8) << raw.eip
+		    << " len=" << dec << setw(2) << static_cast<unsigned int>(raw.len) << " bytes=";
+		for (Bit8u b = 0; b < raw.len; b++) out << setw(2) << setfill('0') << hex << (unsigned int)raw.bytes[b] << " ";
+		for (Bit8u b = raw.len; b < 15; b++) out << "   ";
+		out << "EAX:" << hex << setw(8) << raw.eax << " EBX:" << setw(8) << raw.ebx
+		    << " ECX:" << setw(8) << raw.ecx << " EDX:" << setw(8) << raw.edx
+		    << " ESI:" << setw(8) << raw.esi << " EDI:" << setw(8) << raw.edi
+		    << " EBP:" << setw(8) << raw.ebp << " ESP:" << setw(8) << raw.esp
+		    << " DS:"  << setw(4) << raw.s_ds << " ES:" << setw(4) << raw.s_es
+		    << " FS:"  << setw(4) << raw.s_fs << " GS:" << setw(4) << raw.s_gs
+		    << " SS:"  << setw(4) << raw.s_ss
+		    << " CF:"  << ((raw.flags & 0x01) ? '1' : '0')
+		    << " ZF:"  << ((raw.flags & 0x02) ? '1' : '0')
+		    << " SF:"  << ((raw.flags & 0x04) ? '1' : '0')
+		    << " OF:"  << ((raw.flags & 0x08) ? '1' : '0')
+		    << " AF:"  << ((raw.flags & 0x10) ? '1' : '0')
+		    << " PF:"  << ((raw.flags & 0x20) ? '1' : '0')
+		    << " IF:"  << ((raw.flags & 0x40) ? '1' : '0')
+		    << endl;
+	}
+	out.close();
+	return true;
+}
+
+static bool DEBUG_WriteTextSnapshotLogInst(Bit32u flushIndex) {
+	if (!logTextEnabled) return true;
+	char int_filename[32];
+	snprintf(int_filename,sizeof(int_filename),"LOGCPU_INT_CD_%04u.TXT",flushIndex);
+	ofstream out(int_filename);
+	if (!out.is_open()) {
+		DEBUG_ShowMsg("DEBUG: Failed to create %s.\n", int_filename);
+		return false;
+	}
+	out << hex << noshowbase << setfill('0') << uppercase;
+	out << "; Program: " << (heavyExePath.empty() ? "<unknown>" : heavyExePath) << endl;
+	out << "; Type: " << GetHeavyExeTypeString(heavyExeType) << endl;
+	out << "; PSP: " << setw(4) << heavyExePspSeg << " Parent: " << setw(4) << heavyExeParentPsp
+	    << " LoadSeg: " << setw(4) << heavyExeLoadSeg << " Format: " << (heavyExeIsExe ? "EXE" : "COM");
+	if (heavyExeIsExe) {
+		out << " (header " << dec << heavyExeHeaderSize << " bytes)" << hex;
+	}
+	out << endl;
+	Bit32u startLog = logCount;
+	do {
+		TLogInst & inst = logInst[startLog];
+		out << setw(4) << inst.s_cs << ":" << setw(8) << inst.eip << "  " 
+		    << inst.dline << "  " << inst.res << " EAX:" << setw(8)<< inst.eax
+		    << " EBX:" << setw(8) << inst.ebx << " ECX:" << setw(8) << inst.ecx
+		    << " EDX:" << setw(8) << inst.edx << " ESI:" << setw(8) << inst.esi
+		    << " EDI:" << setw(8) << inst.edi << " EBP:" << setw(8) << inst.ebp
+		    << " ESP:" << setw(8) << inst.esp << " DS:"  << setw(4) << inst.s_ds
+		    << " ES:"  << setw(4) << inst.s_es<< " FS:"  << setw(4) << inst.s_fs
+		    << " GS:"  << setw(4) << inst.s_gs<< " SS:"  << setw(4) << inst.s_ss
+		    << " CF:"  << inst.c  << " ZF:"   << inst.z  << " SF:"  << inst.s
+		    << " OF:"  << inst.o  << " AF:"   << inst.a  << " PF:"  << inst.p
+		    << " IF:"  << inst.i  << endl;
+		if (++startLog >= LOGCPUMAX) startLog = 0;
+	} while (startLog != logCount);
+	out.close();
+	return true;
+}
+
+static void DEBUG_BlockingFlushRawLog(Bit32u flushIndex = 0) {
+	if (!logRawEnabled || !logRawInst || logRawCount == 0) return;
+	if (logRawFlushInProgress) return;
+	logRawFlushInProgress = true;
+	if (flushIndex == 0) flushIndex = logFlushIndex + 1;
+	if (flushIndex > logFlushIndex) logFlushIndex = flushIndex;
+	DEBUG_WriteTextSnapshotRaw(flushIndex);
+	char filename[32];
+	snprintf(filename,sizeof(filename),"LOGCPU_RAW_%04u.BIN",flushIndex);
+	if (!DEBUG_WriteRawLogFile(filename)) {
+		logRawFlushInProgress = false;
+		E_Exit("Failed to create heavy raw cpu log");
+	}
+	logRawCount = 0;
+	logRawFlushInProgress = false;
+}
 
 void DEBUG_HeavyLogInstruction(void) {
+	if (!logRawEnabled && !logRawInst) DEBUG_InitHeavyRawBuffer();
 
 	PhysPt start = GetAddress(SegValue(cs),reg_eip);
 	char dline[200];
@@ -2377,112 +2549,51 @@ void DEBUG_HeavyLogInstruction(void) {
 	inst.p    = get_PF()>0;
 	inst.i    = GETFLAGBOOL(IF);
 
-	TRawInst & raw = logRawInst[logRawCount];
-	raw.s_cs = inst.s_cs;
-	raw.eip  = inst.eip;
-	raw.seq  = logRawSeq++;
-	raw.len  = (Bit8u)((size>15) ? 15 : size);
-	for (Bit8u i=0;i<raw.len;i++) {
-		Bit8u value=0;
-		if (mem_readb_checked(start+i,&value)) value = 0;
-		raw.bytes[i]=value;
+	if (logRawEnabled && logRawInst) {
+		if (logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
+		TRawInst & raw = logRawInst[logRawCount++];
+		raw.s_cs = inst.s_cs;
+		raw.eip  = inst.eip;
+		raw.seq  = logRawSeq++;
+		raw.len  = (Bit8u)((size>15) ? 15 : size);
+		for (Bit8u i=0;i<raw.len;i++) {
+			Bit8u value=0;
+			if (mem_readb_checked(start+i,&value)) value = 0;
+			raw.bytes[i]=value;
+		}
+		if (raw.len<15) for (Bit8u i=raw.len;i<15;i++) raw.bytes[i]=0;
+		raw.eax = reg_eax;
+		raw.ebx = reg_ebx;
+		raw.ecx = reg_ecx;
+		raw.edx = reg_edx;
+		raw.esi = reg_esi;
+		raw.edi = reg_edi;
+		raw.ebp = reg_ebp;
+		raw.esp = reg_esp;
+		raw.s_ds = SegValue(ds);
+		raw.s_es = SegValue(es);
+		raw.s_fs = SegValue(fs);
+		raw.s_gs = SegValue(gs);
+		raw.s_ss = SegValue(ss);
+		raw.flags = 0;
+		raw.flags |= (get_CF()>0) ? 0x01 : 0;
+		raw.flags |= (get_ZF()>0) ? 0x02 : 0;
+		raw.flags |= (get_SF()>0) ? 0x04 : 0;
+		raw.flags |= (get_OF()>0) ? 0x08 : 0;
+		raw.flags |= (get_AF()>0) ? 0x10 : 0;
+		raw.flags |= (get_PF()>0) ? 0x20 : 0;
+		raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
 	}
-	if (raw.len<15) for (Bit8u i=raw.len;i<15;i++) raw.bytes[i]=0;
-	raw.eax = reg_eax;
-	raw.ebx = reg_ebx;
-	raw.ecx = reg_ecx;
-	raw.edx = reg_edx;
-	raw.esi = reg_esi;
-	raw.edi = reg_edi;
-	raw.ebp = reg_ebp;
-	raw.esp = reg_esp;
-	raw.s_ds = SegValue(ds);
-	raw.s_es = SegValue(es);
-	raw.s_fs = SegValue(fs);
-	raw.s_gs = SegValue(gs);
-	raw.s_ss = SegValue(ss);
-	raw.flags = 0;
-	raw.flags |= (get_CF()>0) ? 0x01 : 0;
-	raw.flags |= (get_ZF()>0) ? 0x02 : 0;
-	raw.flags |= (get_SF()>0) ? 0x04 : 0;
-	raw.flags |= (get_OF()>0) ? 0x08 : 0;
-	raw.flags |= (get_AF()>0) ? 0x10 : 0;
-	raw.flags |= (get_PF()>0) ? 0x20 : 0;
-	raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
-
 	if (++logCount >= LOGCPUMAX) logCount = 0;
-	if (++logRawCount >= LOGCPUMAX) {
-		logRawCount = 0;
-		logRawWrapped = true;
-	}
 };
 
 void DEBUG_HeavyWriteLogInstruction(void) {
-	DEBUG_ShowMsg("DEBUG: Creating cpu log LOGCPU_INT_CD.TXT\n");
-
-	ofstream out("LOGCPU_INT_CD.TXT");
-	if (!out.is_open()) {
-		DEBUG_ShowMsg("DEBUG: Failed.\n");	
-		return;
-	}
-	out << hex << noshowbase << setfill('0') << uppercase;
-	out << "; Program: " << (heavyExePath.empty() ? "<unknown>" : heavyExePath) << endl;
-	out << "; Type: " << GetHeavyExeTypeString(heavyExeType) << endl;
-	out << "; PSP: " << setw(4) << heavyExePspSeg << " Parent: " << setw(4) << heavyExeParentPsp
-	    << " LoadSeg: " << setw(4) << heavyExeLoadSeg << " Format: " << (heavyExeIsExe ? "EXE" : "COM");
-	if (heavyExeIsExe) {
-		out << " (header " << dec << heavyExeHeaderSize << " bytes)" << hex;
-	}
-	out << endl;
-	Bit32u startLog = logCount;
-	do {
-		// Write Intructions
-		TLogInst & inst = logInst[startLog];
-		out << setw(4) << inst.s_cs << ":" << setw(8) << inst.eip << "  " 
-		    << inst.dline << "  " << inst.res << " EAX:" << setw(8)<< inst.eax
-		    << " EBX:" << setw(8) << inst.ebx << " ECX:" << setw(8) << inst.ecx
-		    << " EDX:" << setw(8) << inst.edx << " ESI:" << setw(8) << inst.esi
-		    << " EDI:" << setw(8) << inst.edi << " EBP:" << setw(8) << inst.ebp
-		    << " ESP:" << setw(8) << inst.esp << " DS:"  << setw(4) << inst.s_ds
-		    << " ES:"  << setw(4) << inst.s_es<< " FS:"  << setw(4) << inst.s_fs
-		    << " GS:"  << setw(4) << inst.s_gs<< " SS:"  << setw(4) << inst.s_ss
-		    << " CF:"  << inst.c  << " ZF:"   << inst.z  << " SF:"  << inst.s
-		    << " OF:"  << inst.o  << " AF:"   << inst.a  << " PF:"  << inst.p
-		    << " IF:"  << inst.i  << endl;
-
-/*		fprintf(f,"%04X:%08X   %s  %s  EAX:%08X EBX:%08X ECX:%08X EDX:%08X ESI:%08X EDI:%08X EBP:%08X ESP:%08X DS:%04X ES:%04X FS:%04X GS:%04X SS:%04X CF:%01X ZF:%01X SF:%01X OF:%01X AF:%01X PF:%01X IF:%01X\n",
-			logInst[startLog].s_cs,logInst[startLog].eip,logInst[startLog].dline,logInst[startLog].res,logInst[startLog].eax,logInst[startLog].ebx,logInst[startLog].ecx,logInst[startLog].edx,logInst[startLog].esi,logInst[startLog].edi,logInst[startLog].ebp,logInst[startLog].esp,
-		        logInst[startLog].s_ds,logInst[startLog].s_es,logInst[startLog].s_fs,logInst[startLog].s_gs,logInst[startLog].s_ss,
-		        logInst[startLog].c,logInst[startLog].z,logInst[startLog].s,logInst[startLog].o,logInst[startLog].a,logInst[startLog].p,logInst[startLog].i);*/
-		if (++startLog >= LOGCPUMAX) startLog = 0;
-	} while (startLog != logCount);
-	
-	out.close();
-
-	struct RawLogHeader {
-		char   magic[4];
-		Bit32u version;
-		Bit32u record_size;
-		Bit32u count;
-	} header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, 0 };
-
-	ofstream outraw("LOGCPU_RAW.BIN",ios::binary);
-	if (outraw.is_open()) {
-		if (logRawWrapped) header.count = LOGCPUMAX;
-		else header.count = logRawCount;
-		outraw.write((char*)&header,sizeof(header));
-
-		Bit32u startRaw = logRawWrapped ? logRawCount : 0;
-		Bit32u totalRaw = header.count;
-		for (Bit32u idx=0; idx<totalRaw; idx++) {
-			Bit32u pos = startRaw + idx;
-			if (pos>=LOGCPUMAX) pos-=LOGCPUMAX;
-			outraw.write((char*)&logRawInst[pos],RAW_INST_SIZE);
-		}
-		outraw.close();
-		DEBUG_ShowMsg("DEBUG: Raw cpu log LOGCPU_RAW.BIN created\n");
+	Bit32u flushIndex = logFlushIndex + 1;
+	if (logRawEnabled) {
+		DEBUG_BlockingFlushRawLog(flushIndex);
 	} else {
-		DEBUG_ShowMsg("DEBUG: Failed to create raw cpu log LOGCPU_RAW.BIN\n");
+		DEBUG_WriteTextSnapshotLogInst(flushIndex);
+		logFlushIndex = flushIndex;
 	}
 	DEBUG_ShowMsg("DEBUG: Done.\n");	
 };
