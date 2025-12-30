@@ -186,6 +186,8 @@ void MEMDUMP_Init(Section *sec) {
 void MEMDUMP_OnProtectedModeEntry(void) {
 	if (g_trigger != MemDumpTrigger::MEMDUMP_TRIGGER_ON_PM_ENTRY)
 		return;
+	LOG_MSG("MEMDUMP: protected mode entry detected (trigger=%s, enabled=%s)",
+	        g_trigger_name.c_str(), g_enabled ? "yes" : "no");
 	PerformMemDump(g_trigger_name);
 }
 

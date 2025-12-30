@@ -2369,7 +2369,6 @@ static void DEBUG_InitHeavyRawBuffer(void) {
 	if (logRawInst) return;
 	const Bit64u requested_bytes = static_cast<Bit64u>(HEAVY_RAW_MAX_MB) * 1024u * 1024u;
 	if (requested_bytes == 0) {
-		DEBUG_ShowMsg("DEBUG: Heavy raw logging disabled (HEAVY_RAW_MAX_MB=0).\n");
 		logRawEnabled = false;
 		logTextEnabled = false;
 		return;
