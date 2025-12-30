@@ -2313,6 +2313,7 @@ TLogInst logInst[LOGCPUMAX];
 #pragma pack(push,1)
 struct TRawInst {
 	Bit64u seq;
+	Bit64u ticks;
 	Bit32u linear;
 	Bit16u s_cs;
 	Bit32u eip;
@@ -2399,7 +2400,7 @@ static void DEBUG_InitHeavyRawBuffer(void) {
 }
 
 static bool DEBUG_WriteRawLogFile(const char* filename) {
-	RawLogHeader header = { { 'H','R','A','W' }, 3, RAW_INST_SIZE, logRawCount };
+	RawLogHeader header = { { 'H','R','A','W' }, 4, RAW_INST_SIZE, logRawCount };
 	ofstream outraw(filename, ios::binary);
 	if (!outraw.is_open()) return false;
 	outraw.write((char*)&header,sizeof(header));
@@ -2554,6 +2555,7 @@ void DEBUG_HeavyLogInstruction(void) {
 		raw.s_cs = inst.s_cs;
 		raw.eip  = inst.eip;
 		raw.seq  = logRawSeq++;
+		raw.ticks = static_cast<Bit64u>(PIC_TickIndex() + PIC_Ticks);
 		raw.linear = (Bit32u)start;
 		raw.len  = (Bit8u)((size>15) ? 15 : size);
 		for (Bit8u i=0;i<raw.len;i++) {
