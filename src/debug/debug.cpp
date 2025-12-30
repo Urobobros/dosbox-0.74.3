@@ -2549,8 +2549,7 @@ void DEBUG_HeavyLogInstruction(void) {
 	inst.i    = GETFLAGBOOL(IF);
 
 	if (logRawEnabled && logRawInst) {
-		if (logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
-		TRawInst & raw = logRawInst[logRawCount++];
+		TRawInst & raw = logRawInst[logRawCount];
 		raw.s_cs = inst.s_cs;
 		raw.eip  = inst.eip;
 		raw.seq  = logRawSeq++;
@@ -2582,6 +2581,7 @@ void DEBUG_HeavyLogInstruction(void) {
 		raw.flags |= (get_AF()>0) ? 0x10 : 0;
 		raw.flags |= (get_PF()>0) ? 0x20 : 0;
 		raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
+		if (++logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
 	}
 	if (++logCount >= LOGCPUMAX) logCount = 0;
 };
