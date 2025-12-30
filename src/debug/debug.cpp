@@ -2355,11 +2355,11 @@ struct RawLogHeader {
 };
 
 static Bit32u DEBUG_GetHeavyRawCapacity(Bit64u target_bytes) {
-	const Bit64u max_records_by_size = static_cast<Bit64u>(std::numeric_limits<size_t>::max() / sizeof(TRawInst));
+	const Bit64u max_records_by_size = static_cast<Bit64u>((std::numeric_limits<size_t>::max)() / sizeof(TRawInst));
 	Bit64u records = target_bytes / RAW_INST_SIZE;
 	if (records == 0) records = 1;
 	if (records > max_records_by_size) records = max_records_by_size;
-	if (records > std::numeric_limits<Bit32u>::max()) records = std::numeric_limits<Bit32u>::max();
+	if (records > (std::numeric_limits<Bit32u>::max)()) records = (std::numeric_limits<Bit32u>::max)();
 	return static_cast<Bit32u>(records);
 }
 
