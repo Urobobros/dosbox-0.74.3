@@ -1557,6 +1557,14 @@ void CPU_SET_CRX(Bitu cr,Bitu value) {
 				LOG(LOG_CPU,LOG_NORMAL)("Protected mode");
 				PAGING_Enable((value & CR0_PAGING)>0);
 
+				if (MEMDUMP_IsEnabled() && !MEMDUMP_HasDumped()) {
+					LOG_MSG("MEMDUMP: CR0 set PE=1 (was_pmode=%s, trigger=%s)",
+					        was_pmode ? "yes" : "no",
+					        MEMDUMP_CurrentTriggerName().c_str());
+				}
+				if (!was_pmode)
+					MEMDUMP_OnProtectedModeEntry();
+
 				if (!(CPU_AutoDetermineMode&CPU_AUTODETERMINE_MASK)) break;
 
 				if (CPU_AutoDetermineMode&CPU_AUTODETERMINE_CYCLES) {
@@ -1584,8 +1592,6 @@ void CPU_SET_CRX(Bitu cr,Bitu value) {
 				}
 #endif
 				CPU_AutoDetermineMode<<=CPU_AUTODETERMINE_SHIFT;
-				if (!was_pmode)
-					MEMDUMP_OnProtectedModeEntry();
 			} else {
 				cpu.pmode=false;
 				if (value & CR0_PAGING) LOG_MSG("Paging requested without PE=1");

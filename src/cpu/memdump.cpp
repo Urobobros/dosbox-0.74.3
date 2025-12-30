@@ -148,8 +148,16 @@ bool DumpLinearMemory(const std::string &trigger_name) {
 }
 
 void PerformMemDump(const std::string &trigger_name) {
-	if (g_dumped || !g_enabled)
+	if (g_dumped) {
+		LOG_MSG("MEMDUMP: skipping dump for trigger=%s (already dumped)",
+		        trigger_name.c_str());
 		return;
+	}
+	if (!g_enabled) {
+		LOG_MSG("MEMDUMP: skipping dump for trigger=%s (memdump disabled)",
+		        trigger_name.c_str());
+		return;
+	}
 
 	if (!DumpLinearMemory(trigger_name))
 		return;
@@ -180,17 +188,32 @@ void MEMDUMP_Init(Section *sec) {
 		LOG_MSG("MEMDUMP: unknown trigger \"%s\"; disabling memdump.",
 		        g_trigger_name.c_str());
 		g_enabled = false;
+	} else if (g_enabled) {
+		LOG_MSG("MEMDUMP: enabled with trigger=%s, output=%s, descriptor_log=%s",
+		        g_trigger_name.c_str(), g_output_path.c_str(),
+		        g_descriptor_path.c_str());
 	}
 }
 
 void MEMDUMP_OnProtectedModeEntry(void) {
 	if (g_trigger != MemDumpTrigger::MEMDUMP_TRIGGER_ON_PM_ENTRY)
 		return;
+	if (g_dumped) {
+		LOG_MSG("MEMDUMP: protected mode entry detected but dump already taken "
+		        "(trigger=%s)", g_trigger_name.c_str());
+		return;
+	}
+	LOG_MSG("MEMDUMP: protected mode entry detected (trigger=%s, enabled=%s)",
+	        g_trigger_name.c_str(), g_enabled ? "yes" : "no");
 	PerformMemDump(g_trigger_name);
 }
 
 bool MEMDUMP_IsEnabled(void) {
 	return g_enabled;
+}
+
+bool MEMDUMP_HasDumped(void) {
+	return g_dumped;
 }
 
 std::string MEMDUMP_CurrentTriggerName(void) {
