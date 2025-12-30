@@ -32,4 +32,5 @@ extern Bitu debugCallback;
 #ifdef C_HEAVY_DEBUG
 bool DEBUG_HeavyIsBreakpoint(void);
 void DEBUG_HeavyWriteLogInstruction(void);
+void DEBUG_UpdateHeavyExeInfo(const char * exe_path, Bit16u psp_seg, Bit16u load_seg, Bit32u header_size, bool is_exe, Bit16u parent_psp);
 #endif

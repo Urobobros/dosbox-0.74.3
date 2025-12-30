@@ -27,6 +27,7 @@
 #include "callback.h"
 #include "debug.h"
 #include "cpu.h"
+#include "support.h"
 
 const char * RunningProgram="DOSBOX";
 
@@ -258,6 +259,15 @@ bool DOS_Execute(char * name,PhysPt block_pt,Bit8u flags) {
 	Bit16u pspseg,envseg,loadseg,memsize,readsize;
 	PhysPt loadaddress;RealPt relocpt;
 	Bitu headersize=0,imagesize=0;
+#if C_HEAVY_DEBUG
+	char heavyExePath[DOS_PATHLENGTH];
+	heavyExePath[0] = 0;
+	if (!DOS_Canonicalize(name,heavyExePath)) {
+		safe_strncpy(heavyExePath,name,sizeof(heavyExePath));
+		heavyExePath[sizeof(heavyExePath)-1] = 0;
+	}
+	Bit16u heavyParentPsp = dos.psp();
+#endif
 	DOS_ParamBlock block(block_pt);
 
 	block.LoadData();
@@ -439,6 +449,9 @@ bool DOS_Execute(char * name,PhysPt block_pt,Bit8u flags) {
 		block.exec.initsssp = sssp-2;
 		block.exec.initcsip = csip;
 		block.SaveData();
+#if C_HEAVY_DEBUG
+		DEBUG_UpdateHeavyExeInfo(heavyExePath,pspseg,loadseg,headersize,!iscom,newpsp.GetParent());
+#endif
 		return true;
 	}
 
@@ -499,6 +512,9 @@ bool DOS_Execute(char * name,PhysPt block_pt,Bit8u flags) {
 		DOS_MCB pspmcb(dos.psp()-1);
 		pspmcb.SetFileName(stripname);
 		DOS_UpdatePSPName();
+#if C_HEAVY_DEBUG
+		DEBUG_UpdateHeavyExeInfo(heavyExePath,pspseg,loadseg,headersize,!iscom,newpsp.GetParent());
+#endif
 		return true;
 	}
 	return false;
