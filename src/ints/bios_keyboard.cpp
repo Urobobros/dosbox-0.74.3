@@ -26,7 +26,8 @@
 #include "regs.h"
 #include "inout.h"
 #include "dos_inc.h"
-#include "SDL.h"
+
+#include <SDL/SDL.h>
 
 /* SDL by default treats numlock and scrolllock different from all other keys.
  * In recent versions this can disabled by a environment variable which we set in sdlmain.cpp

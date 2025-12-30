@@ -31,7 +31,7 @@
  *  gui_tk. It is enabled by defining the preprocessor macro TESTING.
  */
 
-#include <SDL.h>
+#include <SDL/SDL.h>
 #include "gui_tk.h"
 
 namespace GUI {

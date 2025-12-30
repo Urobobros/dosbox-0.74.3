@@ -34,7 +34,7 @@
 #endif
 
 #include "cross.h"
-#include "SDL.h"
+#include <SDL/SDL.h>
 
 #include "dosbox.h"
 #include "video.h"
@@ -55,7 +55,7 @@
 //#define DISABLE_JOYSTICK
 
 #if C_OPENGL
-#include "SDL_opengl.h"
+#include <SDL/SDL_opengl.h>
 
 #ifndef APIENTRY
 #define APIENTRY
