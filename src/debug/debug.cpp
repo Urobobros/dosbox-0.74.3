@@ -2344,7 +2344,7 @@ static_assert(sizeof(TRawInst) == RAW_INST_SIZE, "TRawInst packing mismatch");
 static TRawInst* logRawInst = NULL;
 static Bit32u logRawCapacity = 0;
 static Bit32u logRawCount = 0;
-static Bit32u logRawFileIndex = 0;
+static Bit32u logFlushIndex = 0;
 static bool logRawFlushInProgress = false;
 
 struct RawLogHeader {
@@ -2383,7 +2383,7 @@ static void DEBUG_InitHeavyRawBuffer(void) {
 	}
 	logRawCount = 0;
 	logRawSeq = 0;
-	logRawFileIndex = 0;
+	logFlushIndex = 0;
 }
 
 static bool DEBUG_WriteRawLogFile(const char* filename) {
@@ -2397,17 +2397,18 @@ static bool DEBUG_WriteRawLogFile(const char* filename) {
 	return true;
 }
 
-static void DEBUG_BlockingFlushRawLog(void) {
+static void DEBUG_BlockingFlushRawLog(Bit32u flushIndex = 0) {
 	if (!logRawInst || logRawCount == 0) return;
 	if (logRawFlushInProgress) return;
 	logRawFlushInProgress = true;
+	if (flushIndex == 0) flushIndex = logFlushIndex + 1;
+	if (flushIndex > logFlushIndex) logFlushIndex = flushIndex;
 	char filename[32];
-	snprintf(filename,sizeof(filename),"LOGCPU_RAW_%04u.BIN",logRawFileIndex + 1);
+	snprintf(filename,sizeof(filename),"LOGCPU_RAW_%04u.BIN",flushIndex);
 	if (!DEBUG_WriteRawLogFile(filename)) {
 		logRawFlushInProgress = false;
 		E_Exit("Failed to create heavy raw cpu log");
 	}
-	logRawFileIndex++;
 	logRawCount = 0;
 	logRawFlushInProgress = false;
 }
@@ -2489,9 +2490,12 @@ void DEBUG_HeavyLogInstruction(void) {
 };
 
 void DEBUG_HeavyWriteLogInstruction(void) {
+	Bit32u flushIndex = logFlushIndex + 1;
 	DEBUG_ShowMsg("DEBUG: Creating cpu log LOGCPU_INT_CD.TXT\n");
 
-	ofstream out("LOGCPU_INT_CD.TXT");
+	char int_filename[32];
+	snprintf(int_filename,sizeof(int_filename),"LOGCPU_INT_CD_%04u.TXT",flushIndex);
+	ofstream out(int_filename);
 	if (!out.is_open()) {
 		DEBUG_ShowMsg("DEBUG: Failed.\n");	
 		return;
@@ -2530,7 +2534,7 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 	
 	out.close();
 
-	DEBUG_BlockingFlushRawLog();
+	DEBUG_BlockingFlushRawLog(flushIndex);
 	DEBUG_ShowMsg("DEBUG: Done.\n");	
 };
 
