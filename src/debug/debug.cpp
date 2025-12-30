@@ -2551,38 +2551,40 @@ void DEBUG_HeavyLogInstruction(void) {
 
 	if (logRawEnabled && logRawInst) {
 		if (logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
-		TRawInst & raw = logRawInst[logRawCount++];
-		raw.s_cs = inst.s_cs;
-		raw.eip  = inst.eip;
-		raw.seq  = logRawSeq++;
-		raw.len  = (Bit8u)((size>15) ? 15 : size);
-		for (Bit8u i=0;i<raw.len;i++) {
-			Bit8u value=0;
-			if (mem_readb_checked(start+i,&value)) value = 0;
-			raw.bytes[i]=value;
+		if (logRawCount < logRawCapacity) {
+			TRawInst & raw = logRawInst[logRawCount++];
+			raw.s_cs = inst.s_cs;
+			raw.eip  = inst.eip;
+			raw.seq  = logRawSeq++;
+			raw.len  = (Bit8u)((size>15) ? 15 : size);
+			for (Bit8u i=0;i<raw.len;i++) {
+				Bit8u value=0;
+				if (mem_readb_checked(start+i,&value)) value = 0;
+				raw.bytes[i]=value;
+			}
+			if (raw.len<15) for (Bit8u i=raw.len;i<15;i++) raw.bytes[i]=0;
+			raw.eax = reg_eax;
+			raw.ebx = reg_ebx;
+			raw.ecx = reg_ecx;
+			raw.edx = reg_edx;
+			raw.esi = reg_esi;
+			raw.edi = reg_edi;
+			raw.ebp = reg_ebp;
+			raw.esp = reg_esp;
+			raw.s_ds = SegValue(ds);
+			raw.s_es = SegValue(es);
+			raw.s_fs = SegValue(fs);
+			raw.s_gs = SegValue(gs);
+			raw.s_ss = SegValue(ss);
+			raw.flags = 0;
+			raw.flags |= (get_CF()>0) ? 0x01 : 0;
+			raw.flags |= (get_ZF()>0) ? 0x02 : 0;
+			raw.flags |= (get_SF()>0) ? 0x04 : 0;
+			raw.flags |= (get_OF()>0) ? 0x08 : 0;
+			raw.flags |= (get_AF()>0) ? 0x10 : 0;
+			raw.flags |= (get_PF()>0) ? 0x20 : 0;
+			raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
 		}
-		if (raw.len<15) for (Bit8u i=raw.len;i<15;i++) raw.bytes[i]=0;
-		raw.eax = reg_eax;
-		raw.ebx = reg_ebx;
-		raw.ecx = reg_ecx;
-		raw.edx = reg_edx;
-		raw.esi = reg_esi;
-		raw.edi = reg_edi;
-		raw.ebp = reg_ebp;
-		raw.esp = reg_esp;
-		raw.s_ds = SegValue(ds);
-		raw.s_es = SegValue(es);
-		raw.s_fs = SegValue(fs);
-		raw.s_gs = SegValue(gs);
-		raw.s_ss = SegValue(ss);
-		raw.flags = 0;
-		raw.flags |= (get_CF()>0) ? 0x01 : 0;
-		raw.flags |= (get_ZF()>0) ? 0x02 : 0;
-		raw.flags |= (get_SF()>0) ? 0x04 : 0;
-		raw.flags |= (get_OF()>0) ? 0x08 : 0;
-		raw.flags |= (get_AF()>0) ? 0x10 : 0;
-		raw.flags |= (get_PF()>0) ? 0x20 : 0;
-		raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
 	}
 	if (++logCount >= LOGCPUMAX) logCount = 0;
 };
