@@ -28,6 +28,8 @@
 #include <iomanip>
 #include <string>
 #include <sstream>
+#include <limits>
+#include <new>
 using namespace std;
 
 #include "debug.h"
@@ -2276,8 +2278,6 @@ const Bit32u LOGCPUMAX = 20000;
 static Bit16u logCpuCS [LOGCPUMAX];
 static Bit32u logCpuEIP[LOGCPUMAX];
 static Bit32u logCount = 0;
-static Bit32u logRawCount = 0;
-static bool   logRawWrapped = false;
 static Bit64u logRawSeq = 0;
 
 struct TLogInst {
@@ -2337,9 +2337,84 @@ struct TRawInst {
 static const Bit32u RAW_INST_SIZE = 73; /* Packed size of TRawInst */
 static_assert(sizeof(TRawInst) == RAW_INST_SIZE, "TRawInst packing mismatch");
 
-static TRawInst logRawInst[LOGCPUMAX];
+#ifndef HEAVY_RAW_MAX_MB
+#define HEAVY_RAW_MAX_MB 32
+#endif
+
+static TRawInst* logRawInst = NULL;
+static Bit32u logRawCapacity = 0;
+static Bit32u logRawCount = 0;
+static Bit32u logFlushIndex = 0;
+static bool logRawFlushInProgress = false;
+
+struct RawLogHeader {
+	char   magic[4];
+	Bit32u version;
+	Bit32u record_size;
+	Bit32u count;
+};
+
+static Bit32u DEBUG_GetHeavyRawCapacity(Bit64u target_bytes) {
+	const Bit64u max_records_by_size = static_cast<Bit64u>((std::numeric_limits<size_t>::max)() / sizeof(TRawInst));
+	Bit64u records = target_bytes / RAW_INST_SIZE;
+	if (records == 0) records = 1;
+	if (records > max_records_by_size) records = max_records_by_size;
+	if (records > (std::numeric_limits<Bit32u>::max)()) records = (std::numeric_limits<Bit32u>::max)();
+	return static_cast<Bit32u>(records);
+}
+
+static void DEBUG_InitHeavyRawBuffer(void) {
+	if (logRawInst) return;
+	const Bit64u requested_bytes = static_cast<Bit64u>(HEAVY_RAW_MAX_MB) * 1024u * 1024u;
+	logRawCapacity = DEBUG_GetHeavyRawCapacity(requested_bytes);
+	logRawInst = new (std::nothrow) TRawInst[logRawCapacity];
+	if (!logRawInst) {
+		/* Fallback to a smaller buffer if the requested size cannot be allocated. */
+		const Bit64u fallback_bytes = static_cast<Bit64u>(32) * 1024u * 1024u;
+		logRawCapacity = DEBUG_GetHeavyRawCapacity(fallback_bytes);
+		logRawInst = new (std::nothrow) TRawInst[logRawCapacity];
+		if (!logRawInst) {
+			E_Exit("Failed to allocate heavy raw cpu log buffer");
+		} else {
+			DEBUG_ShowMsg("DEBUG: Raw buffer reduced to %u records (~%u MB).\n",
+			              logRawCapacity,
+			              (unsigned int)((static_cast<Bit64u>(logRawCapacity) * RAW_INST_SIZE) / (1024u * 1024u)));
+		}
+	}
+	logRawCount = 0;
+	logRawSeq = 0;
+	logFlushIndex = 0;
+}
+
+static bool DEBUG_WriteRawLogFile(const char* filename) {
+	RawLogHeader header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, logRawCount };
+	ofstream outraw(filename, ios::binary);
+	if (!outraw.is_open()) return false;
+	outraw.write((char*)&header,sizeof(header));
+	outraw.write((char*)logRawInst, RAW_INST_SIZE * header.count);
+	outraw.close();
+	DEBUG_ShowMsg("DEBUG: Raw cpu log %s created\n",filename);
+	return true;
+}
+
+static void DEBUG_BlockingFlushRawLog(Bit32u flushIndex = 0) {
+	if (!logRawInst || logRawCount == 0) return;
+	if (logRawFlushInProgress) return;
+	logRawFlushInProgress = true;
+	if (flushIndex == 0) flushIndex = logFlushIndex + 1;
+	if (flushIndex > logFlushIndex) logFlushIndex = flushIndex;
+	char filename[32];
+	snprintf(filename,sizeof(filename),"LOGCPU_RAW_%04u.BIN",flushIndex);
+	if (!DEBUG_WriteRawLogFile(filename)) {
+		logRawFlushInProgress = false;
+		E_Exit("Failed to create heavy raw cpu log");
+	}
+	logRawCount = 0;
+	logRawFlushInProgress = false;
+}
 
 void DEBUG_HeavyLogInstruction(void) {
+	if (!logRawInst) DEBUG_InitHeavyRawBuffer();
 
 	PhysPt start = GetAddress(SegValue(cs),reg_eip);
 	char dline[200];
@@ -2377,7 +2452,8 @@ void DEBUG_HeavyLogInstruction(void) {
 	inst.p    = get_PF()>0;
 	inst.i    = GETFLAGBOOL(IF);
 
-	TRawInst & raw = logRawInst[logRawCount];
+	if (logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
+	TRawInst & raw = logRawInst[logRawCount++];
 	raw.s_cs = inst.s_cs;
 	raw.eip  = inst.eip;
 	raw.seq  = logRawSeq++;
@@ -2411,16 +2487,15 @@ void DEBUG_HeavyLogInstruction(void) {
 	raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
 
 	if (++logCount >= LOGCPUMAX) logCount = 0;
-	if (++logRawCount >= LOGCPUMAX) {
-		logRawCount = 0;
-		logRawWrapped = true;
-	}
 };
 
 void DEBUG_HeavyWriteLogInstruction(void) {
+	Bit32u flushIndex = logFlushIndex + 1;
 	DEBUG_ShowMsg("DEBUG: Creating cpu log LOGCPU_INT_CD.TXT\n");
 
-	ofstream out("LOGCPU_INT_CD.TXT");
+	char int_filename[32];
+	snprintf(int_filename,sizeof(int_filename),"LOGCPU_INT_CD_%04u.TXT",flushIndex);
+	ofstream out(int_filename);
 	if (!out.is_open()) {
 		DEBUG_ShowMsg("DEBUG: Failed.\n");	
 		return;
@@ -2459,31 +2534,7 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 	
 	out.close();
 
-	struct RawLogHeader {
-		char   magic[4];
-		Bit32u version;
-		Bit32u record_size;
-		Bit32u count;
-	} header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, 0 };
-
-	ofstream outraw("LOGCPU_RAW.BIN",ios::binary);
-	if (outraw.is_open()) {
-		if (logRawWrapped) header.count = LOGCPUMAX;
-		else header.count = logRawCount;
-		outraw.write((char*)&header,sizeof(header));
-
-		Bit32u startRaw = logRawWrapped ? logRawCount : 0;
-		Bit32u totalRaw = header.count;
-		for (Bit32u idx=0; idx<totalRaw; idx++) {
-			Bit32u pos = startRaw + idx;
-			if (pos>=LOGCPUMAX) pos-=LOGCPUMAX;
-			outraw.write((char*)&logRawInst[pos],RAW_INST_SIZE);
-		}
-		outraw.close();
-		DEBUG_ShowMsg("DEBUG: Raw cpu log LOGCPU_RAW.BIN created\n");
-	} else {
-		DEBUG_ShowMsg("DEBUG: Failed to create raw cpu log LOGCPU_RAW.BIN\n");
-	}
+	DEBUG_BlockingFlushRawLog(flushIndex);
 	DEBUG_ShowMsg("DEBUG: Done.\n");	
 };
 
