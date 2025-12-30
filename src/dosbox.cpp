@@ -38,6 +38,7 @@
 #include "control.h"
 #include "cross.h"
 #include "programs.h"
+#include "memdump.h"
 #include "support.h"
 #include "mapper.h"
 #include "ints/int10.h"
@@ -558,12 +559,27 @@ void DOSBOX_Init(void) {
 	                  "  Or in the case of coreaudio, you can specify a soundfont here.\n"
 	                  "  See the README/Manual for more details.");
 
-#if C_DEBUG
-	secprop=control->AddSection_prop("debug",&DEBUG_Init);
-#endif
+	#if C_DEBUG
+		secprop=control->AddSection_prop("debug",&DEBUG_Init);
+	#endif
 
-	secprop=control->AddSection_prop("sblaster",&SBLASTER_Init,true);//done
+		const char* memdump_triggers[] = { "off", "on_pm_entry", 0 };
+		secprop=control->AddSection_prop("memdump",&MEMDUMP_Init,true);
+		Pbool = secprop->Add_bool("enabled",Property::Changeable::OnlyAtStart,false);
+		Pbool->Set_help("Enable automatic memory dumping without the interactive debugger.");
+
+		Pstring = secprop->Add_string("trigger",Property::Changeable::OnlyAtStart,"off");
+		Pstring->Set_values(memdump_triggers);
+		Pstring->Set_help("When to fire the automatic memory dump. 'on_pm_entry' dumps on the first switch to protected mode.");
+
+		Pstring = secprop->Add_path("output",Property::Changeable::OnlyAtStart,"memdump.bin");
+		Pstring->Set_help("Where to write the raw memory dump.");
+
+		Pstring = secprop->Add_path("descriptor_log",Property::Changeable::OnlyAtStart,"");
+		Pstring->Set_help("Optional file that records GDT/IDT descriptors. Leave empty to skip.");
 	
+		secprop=control->AddSection_prop("sblaster",&SBLASTER_Init,true);//done
+		
 	const char* sbtypes[] = { "sb1", "sb2", "sbpro1", "sbpro2", "sb16", "gb", "none", 0 };
 	Pstring = secprop->Add_string("sbtype",Property::Changeable::WhenIdle,"sb16");
 	Pstring->Set_values(sbtypes);

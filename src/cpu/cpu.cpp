@@ -30,6 +30,7 @@
 #include "paging.h"
 #include "lazyflags.h"
 #include "support.h"
+#include "memdump.h"
 
 Bitu DEBUG_EnableDebugger(void);
 extern void GFX_SetTitle(Bit32s cycles ,Bits frameskip,bool paused);
@@ -1549,10 +1550,12 @@ void CPU_SET_CRX(Bitu cr,Bitu value) {
 		{
 			Bitu changed=cpu.cr0 ^ value;
 			if (!changed) return;
+			const bool was_protected = (cpu.cr0 & CR0_PROTECTION) != 0;
 			cpu.cr0=value;
 			if (value & CR0_PROTECTION) {
 				cpu.pmode=true;
 				LOG(LOG_CPU,LOG_NORMAL)("Protected mode");
+				if (!was_protected) MEMDUMP_OnProtectedModeEntry();
 				PAGING_Enable((value & CR0_PAGING)>0);
 
 				if (!(CPU_AutoDetermineMode&CPU_AUTODETERMINE_MASK)) break;
