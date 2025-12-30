@@ -117,6 +117,7 @@ static Bit16u heavyExeLoadSeg = 0;
 static Bit32u heavyExeHeaderSize = 0;
 static Bit16u heavyExeParentPsp = 0;
 static bool heavyExeIsExe = false;
+static ExeType heavyExeType = EXE_UNKNOWN;
 #endif
 
 
@@ -1883,7 +1884,16 @@ static void LogCPUInfo(void) {
 };
 
 #if C_HEAVY_DEBUG
-void DEBUG_UpdateHeavyExeInfo(const char * exe_path, Bit16u psp_seg, Bit16u load_seg, Bit32u header_size, bool is_exe, Bit16u parent_psp) {
+static const char * GetHeavyExeTypeString(ExeType type) {
+	switch (type) {
+	case EXE_MZ_REALMODE:	return "MZ";
+	case EXE_LE_DOS4GW:		return "DOS4GW (LE)";
+	case EXE_LX_DOS4GW:		return "DOS4GW (LX)";
+	default:				return "<unknown>";
+	}
+}
+
+void DEBUG_UpdateHeavyExeInfo(const char * exe_path, Bit16u psp_seg, Bit16u load_seg, Bit32u header_size, bool is_exe, Bit16u parent_psp, ExeType exe_type) {
 	if (exe_path) heavyExePath = exe_path;
 	else heavyExePath.clear();
 
@@ -1892,6 +1902,7 @@ void DEBUG_UpdateHeavyExeInfo(const char * exe_path, Bit16u psp_seg, Bit16u load
 	heavyExeHeaderSize = header_size;
 	heavyExeIsExe = is_exe;
 	heavyExeParentPsp = parent_psp;
+	heavyExeType = exe_type;
 }
 
 static void LogInstruction(Bit16u segValue, Bit32u eipValue,  ofstream& out) {
@@ -2353,6 +2364,7 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 	}
 	out << hex << noshowbase << setfill('0') << uppercase;
 	out << "; Program: " << (heavyExePath.empty() ? "<unknown>" : heavyExePath) << endl;
+	out << "; Type: " << GetHeavyExeTypeString(heavyExeType) << endl;
 	out << "; PSP: " << setw(4) << heavyExePspSeg << " Parent: " << setw(4) << heavyExeParentPsp
 	    << " LoadSeg: " << setw(4) << heavyExeLoadSeg << " Format: " << (heavyExeIsExe ? "EXE" : "COM");
 	if (heavyExeIsExe) {
