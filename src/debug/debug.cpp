@@ -2417,22 +2417,30 @@ static bool DEBUG_WriteTextSnapshot(Bit32u flushIndex) {
 		out << " (header " << dec << heavyExeHeaderSize << " bytes)" << hex;
 	}
 	out << endl;
-	Bit32u startLog = logCount;
-	do {
-		TLogInst & inst = logInst[startLog];
-		out << setw(4) << inst.s_cs << ":" << setw(8) << inst.eip << "  " 
-		    << inst.dline << "  " << inst.res << " EAX:" << setw(8)<< inst.eax
-		    << " EBX:" << setw(8) << inst.ebx << " ECX:" << setw(8) << inst.ecx
-		    << " EDX:" << setw(8) << inst.edx << " ESI:" << setw(8) << inst.esi
-		    << " EDI:" << setw(8) << inst.edi << " EBP:" << setw(8) << inst.ebp
-		    << " ESP:" << setw(8) << inst.esp << " DS:"  << setw(4) << inst.s_ds
-		    << " ES:"  << setw(4) << inst.s_es<< " FS:"  << setw(4) << inst.s_fs
-		    << " GS:"  << setw(4) << inst.s_gs<< " SS:"  << setw(4) << inst.s_ss
-		    << " CF:"  << inst.c  << " ZF:"   << inst.z  << " SF:"  << inst.s
-		    << " OF:"  << inst.o  << " AF:"   << inst.a  << " PF:"  << inst.p
-		    << " IF:"  << inst.i  << endl;
-		if (++startLog >= LOGCPUMAX) startLog = 0;
-	} while (startLog != logCount);
+	out << "; Records: " << dec << logRawCount << hex << endl;
+	for (Bit32u idx = 0; idx < logRawCount; idx++) {
+		const TRawInst & raw = logRawInst[idx];
+		out << "seq=" << dec << raw.seq << "  "
+		    << hex << setw(4) << setfill('0') << raw.s_cs << ":" << setw(8) << raw.eip
+		    << " len=" << dec << setw(2) << static_cast<unsigned int>(raw.len) << " bytes=";
+		for (Bit8u b = 0; b < raw.len; b++) out << setw(2) << setfill('0') << hex << (unsigned int)raw.bytes[b] << " ";
+		for (Bit8u b = raw.len; b < 15; b++) out << "   ";
+		out << "EAX:" << hex << setw(8) << raw.eax << " EBX:" << setw(8) << raw.ebx
+		    << " ECX:" << setw(8) << raw.ecx << " EDX:" << setw(8) << raw.edx
+		    << " ESI:" << setw(8) << raw.esi << " EDI:" << setw(8) << raw.edi
+		    << " EBP:" << setw(8) << raw.ebp << " ESP:" << setw(8) << raw.esp
+		    << " DS:"  << setw(4) << raw.s_ds << " ES:" << setw(4) << raw.s_es
+		    << " FS:"  << setw(4) << raw.s_fs << " GS:" << setw(4) << raw.s_gs
+		    << " SS:"  << setw(4) << raw.s_ss
+		    << " CF:"  << ((raw.flags & 0x01) ? '1' : '0')
+		    << " ZF:"  << ((raw.flags & 0x02) ? '1' : '0')
+		    << " SF:"  << ((raw.flags & 0x04) ? '1' : '0')
+		    << " OF:"  << ((raw.flags & 0x08) ? '1' : '0')
+		    << " AF:"  << ((raw.flags & 0x10) ? '1' : '0')
+		    << " PF:"  << ((raw.flags & 0x20) ? '1' : '0')
+		    << " IF:"  << ((raw.flags & 0x40) ? '1' : '0')
+		    << endl;
+	}
 	out.close();
 	return true;
 }
