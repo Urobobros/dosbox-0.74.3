@@ -2276,8 +2276,6 @@ const Bit32u LOGCPUMAX = 20000;
 static Bit16u logCpuCS [LOGCPUMAX];
 static Bit32u logCpuEIP[LOGCPUMAX];
 static Bit32u logCount = 0;
-static Bit32u logRawCount = 0;
-static bool   logRawWrapped = false;
 static Bit64u logRawSeq = 0;
 
 struct TLogInst {
@@ -2337,9 +2335,67 @@ struct TRawInst {
 static const Bit32u RAW_INST_SIZE = 73; /* Packed size of TRawInst */
 static_assert(sizeof(TRawInst) == RAW_INST_SIZE, "TRawInst packing mismatch");
 
-static TRawInst logRawInst[LOGCPUMAX];
+#ifndef HEAVY_RAW_MAX_MB
+#define HEAVY_RAW_MAX_MB 32
+#endif
+
+static TRawInst* logRawInst = NULL;
+static Bit32u logRawCapacity = 0;
+static Bit32u logRawCount = 0;
+static Bit32u logRawFileIndex = 0;
+static bool logRawFlushInProgress = false;
+
+struct RawLogHeader {
+	char   magic[4];
+	Bit32u version;
+	Bit32u record_size;
+	Bit32u count;
+};
+
+static Bit32u DEBUG_GetHeavyRawCapacity(void) {
+	const Bit64u bytes = static_cast<Bit64u>(HEAVY_RAW_MAX_MB) * 1024u * 1024u;
+	Bit32u records = static_cast<Bit32u>(bytes / RAW_INST_SIZE);
+	if (records == 0) records = 1;
+	return records;
+}
+
+static void DEBUG_InitHeavyRawBuffer(void) {
+	if (logRawInst) return;
+	logRawCapacity = DEBUG_GetHeavyRawCapacity();
+	logRawInst = new TRawInst[logRawCapacity];
+	logRawCount = 0;
+	logRawSeq = 0;
+	logRawFileIndex = 0;
+}
+
+static bool DEBUG_WriteRawLogFile(const char* filename) {
+	RawLogHeader header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, logRawCount };
+	ofstream outraw(filename, ios::binary);
+	if (!outraw.is_open()) return false;
+	outraw.write((char*)&header,sizeof(header));
+	outraw.write((char*)logRawInst, RAW_INST_SIZE * header.count);
+	outraw.close();
+	DEBUG_ShowMsg("DEBUG: Raw cpu log %s created\n",filename);
+	return true;
+}
+
+static void DEBUG_BlockingFlushRawLog(void) {
+	if (!logRawInst || logRawCount == 0) return;
+	if (logRawFlushInProgress) return;
+	logRawFlushInProgress = true;
+	char filename[32];
+	snprintf(filename,sizeof(filename),"LOGCPU_RAW_%04u.BIN",logRawFileIndex + 1);
+	if (!DEBUG_WriteRawLogFile(filename)) {
+		logRawFlushInProgress = false;
+		E_Exit("Failed to create heavy raw cpu log");
+	}
+	logRawFileIndex++;
+	logRawCount = 0;
+	logRawFlushInProgress = false;
+}
 
 void DEBUG_HeavyLogInstruction(void) {
+	if (!logRawInst) DEBUG_InitHeavyRawBuffer();
 
 	PhysPt start = GetAddress(SegValue(cs),reg_eip);
 	char dline[200];
@@ -2377,7 +2433,8 @@ void DEBUG_HeavyLogInstruction(void) {
 	inst.p    = get_PF()>0;
 	inst.i    = GETFLAGBOOL(IF);
 
-	TRawInst & raw = logRawInst[logRawCount];
+	if (logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
+	TRawInst & raw = logRawInst[logRawCount++];
 	raw.s_cs = inst.s_cs;
 	raw.eip  = inst.eip;
 	raw.seq  = logRawSeq++;
@@ -2411,10 +2468,6 @@ void DEBUG_HeavyLogInstruction(void) {
 	raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
 
 	if (++logCount >= LOGCPUMAX) logCount = 0;
-	if (++logRawCount >= LOGCPUMAX) {
-		logRawCount = 0;
-		logRawWrapped = true;
-	}
 };
 
 void DEBUG_HeavyWriteLogInstruction(void) {
@@ -2459,31 +2512,7 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 	
 	out.close();
 
-	struct RawLogHeader {
-		char   magic[4];
-		Bit32u version;
-		Bit32u record_size;
-		Bit32u count;
-	} header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, 0 };
-
-	ofstream outraw("LOGCPU_RAW.BIN",ios::binary);
-	if (outraw.is_open()) {
-		if (logRawWrapped) header.count = LOGCPUMAX;
-		else header.count = logRawCount;
-		outraw.write((char*)&header,sizeof(header));
-
-		Bit32u startRaw = logRawWrapped ? logRawCount : 0;
-		Bit32u totalRaw = header.count;
-		for (Bit32u idx=0; idx<totalRaw; idx++) {
-			Bit32u pos = startRaw + idx;
-			if (pos>=LOGCPUMAX) pos-=LOGCPUMAX;
-			outraw.write((char*)&logRawInst[pos],RAW_INST_SIZE);
-		}
-		outraw.close();
-		DEBUG_ShowMsg("DEBUG: Raw cpu log LOGCPU_RAW.BIN created\n");
-	} else {
-		DEBUG_ShowMsg("DEBUG: Failed to create raw cpu log LOGCPU_RAW.BIN\n");
-	}
+	DEBUG_BlockingFlushRawLog();
 	DEBUG_ShowMsg("DEBUG: Done.\n");	
 };
 
