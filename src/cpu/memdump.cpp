@@ -180,6 +180,10 @@ void MEMDUMP_Init(Section *sec) {
 		LOG_MSG("MEMDUMP: unknown trigger \"%s\"; disabling memdump.",
 		        g_trigger_name.c_str());
 		g_enabled = false;
+	} else if (g_enabled) {
+		LOG_MSG("MEMDUMP: enabled with trigger=%s, output=%s, descriptor_log=%s",
+		        g_trigger_name.c_str(), g_output_path.c_str(),
+		        g_descriptor_path.c_str());
 	}
 }
 
