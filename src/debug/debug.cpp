@@ -2313,6 +2313,7 @@ TLogInst logInst[LOGCPUMAX];
 #pragma pack(push,1)
 struct TRawInst {
 	Bit64u seq;
+	Bit32u linear;
 	Bit16u s_cs;
 	Bit32u eip;
 	Bit8u  len;
@@ -2334,11 +2335,11 @@ struct TRawInst {
 };
 #pragma pack(pop)
 
-static const Bit32u RAW_INST_SIZE = 73; /* Packed size of TRawInst */
+static const Bit32u RAW_INST_SIZE = sizeof(TRawInst); /* Packed size of TRawInst */
 static_assert(sizeof(TRawInst) == RAW_INST_SIZE, "TRawInst packing mismatch");
 
 #ifndef HEAVY_RAW_MAX_MB
-#define HEAVY_RAW_MAX_MB 0
+#define HEAVY_RAW_MAX_MB 30
 #endif
 
 static TRawInst* logRawInst = NULL;
@@ -2347,7 +2348,7 @@ static Bit32u logRawCount = 0;
 static Bit32u logFlushIndex = 0;
 static bool logRawFlushInProgress = false;
 static bool logRawEnabled = false;
-static bool logTextEnabled = true;
+static bool logTextEnabled = false;
 
 struct RawLogHeader {
 	char   magic[4];
@@ -2398,7 +2399,7 @@ static void DEBUG_InitHeavyRawBuffer(void) {
 }
 
 static bool DEBUG_WriteRawLogFile(const char* filename) {
-	RawLogHeader header = { { 'H','R','A','W' }, 2, RAW_INST_SIZE, logRawCount };
+	RawLogHeader header = { { 'H','R','A','W' }, 3, RAW_INST_SIZE, logRawCount };
 	ofstream outraw(filename, ios::binary);
 	if (!outraw.is_open()) return false;
 	outraw.write((char*)&header,sizeof(header));
@@ -2549,11 +2550,11 @@ void DEBUG_HeavyLogInstruction(void) {
 	inst.i    = GETFLAGBOOL(IF);
 
 	if (logRawEnabled && logRawInst) {
-		if (logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
-		TRawInst & raw = logRawInst[logRawCount++];
+		TRawInst & raw = logRawInst[logRawCount];
 		raw.s_cs = inst.s_cs;
 		raw.eip  = inst.eip;
 		raw.seq  = logRawSeq++;
+		raw.linear = (Bit32u)start;
 		raw.len  = (Bit8u)((size>15) ? 15 : size);
 		for (Bit8u i=0;i<raw.len;i++) {
 			Bit8u value=0;
@@ -2582,6 +2583,7 @@ void DEBUG_HeavyLogInstruction(void) {
 		raw.flags |= (get_AF()>0) ? 0x10 : 0;
 		raw.flags |= (get_PF()>0) ? 0x20 : 0;
 		raw.flags |= GETFLAGBOOL(IF) ? 0x40 : 0;
+		if (++logRawCount >= logRawCapacity) DEBUG_BlockingFlushRawLog();
 	}
 	if (++logCount >= LOGCPUMAX) logCount = 0;
 };
