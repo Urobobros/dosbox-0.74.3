@@ -109,7 +109,7 @@ static bool		cpuLog			= false;
 static int		cpuLogCounter	= 0;
 static int		cpuLogType		= 1;	// log detail
 static bool zeroProtect = false;
-bool	logHeavy	= false;
+bool	logHeavy	= true;
 
 static string heavyExePath;
 static Bit16u heavyExePspSeg = 0;
@@ -1252,8 +1252,8 @@ bool ParseCommand(char* str) {
 
 #if C_HEAVY_DEBUG
 	if (command == "HEAVYLOG") { // Create Cpu log file
-		logHeavy = !logHeavy;
-		DEBUG_ShowMsg("DEBUG: Heavy cpu logging %s.\n",logHeavy?"on":"off");
+		DEBUG_ShowMsg("DEBUG: Heavy cpu logging is always enabled; writing log snapshot.\n");
+		DEBUG_HeavyWriteLogInstruction();
 		return true;
 	};
 
@@ -2058,6 +2058,9 @@ void DEBUG_SetupConsole(void) {
 static void DEBUG_ShutDown(Section * /*sec*/) {
 	CBreakpoint::DeleteAll();
 	CDebugVar::DeleteAll();
+#if C_HEAVY_DEBUG
+	DEBUG_HeavyWriteLogInstruction();
+#endif
 	curs_set(old_cursor_state);
 	#ifndef WIN32
 	tcsetattr(0, TCSANOW,&consolesettings);
@@ -2353,7 +2356,6 @@ void DEBUG_HeavyLogInstruction(void) {
 
 void DEBUG_HeavyWriteLogInstruction(void) {
 	if (!logHeavy) return;
-	logHeavy = false;
 	
 	DEBUG_ShowMsg("DEBUG: Creating cpu log LOGCPU_INT_CD.TXT\n");
 
